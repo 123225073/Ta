@@ -1,0 +1,102 @@
+{
+  "name": "ta-windows",
+  "version": "1.1.11",
+  "private": true,
+  "description": "拓（Ta）AI 原生截图工具 Windows 客户端",
+  "author": "Ta contributors",
+  "license": "MIT",
+  "main": "dist-electron/main.js",
+  "scripts": {
+    "dev": "npm run prepare:assets && concurrently -k \"vite --host 127.0.0.1\" \"tsc -p electron/tsconfig.json --watch\" \"wait-on tcp:5173 dist-electron/main.js && cross-env TA_DEV_SERVER_URL=http://127.0.0.1:5173 electron .\"",
+    "prepare:assets": "node scripts/prepare-assets.cjs",
+    "typecheck": "tsc -p electron/tsconfig.json --noEmit && tsc -p tsconfig.json --noEmit",
+    "build": "npm run prepare:assets && tsc -p electron/tsconfig.json && vite build",
+    "test": "vitest run --config vitest.config.mts",
+    "test:preview-fidelity": "node scripts/regression-preview-fidelity.cjs",
+    "test:watch": "vitest --config vitest.config.mts",
+    "dist": "npm run test && npm run test:preview-fidelity && npm run typecheck && npm run build && electron-builder --win nsis",
+    "smoke": "node scripts/smoke.cjs",
+    "smoke:e2e": "node scripts/e2e-smoke.cjs",
+    "configure:cpa": "node scripts/cpa-maintenance.cjs import",
+    "verify:cpa": "node scripts/cpa-maintenance.cjs verify"
+  },
+  "dependencies": {
+    "@tesseract.js-data/chi_sim": "1.0.0",
+    "@tesseract.js-data/eng": "1.0.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "sharp": "0.35.4",
+    "tesseract.js": "7.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "latest",
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "@vitejs/plugin-react": "latest",
+    "concurrently": "latest",
+    "cross-env": "latest",
+    "electron": "44.0.0",
+    "electron-builder": "26.15.3",
+    "typescript": "7.0.2",
+    "vite": "8.2.2",
+    "vitest": "^3.2.7",
+    "wait-on": "latest"
+  },
+  "build": {
+    "electronDist": "node_modules/electron/dist",
+    "appId": "com.ta.screenshot.windows",
+    "productName": "拓 Ta",
+    "copyright": "Copyright © 2026 Ta contributors",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "node_modules/sharp/**/*",
+      "node_modules/@img/**/*",
+      "node_modules/tesseract.js/**/*",
+      "node_modules/tesseract.js-core/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/ocr",
+        "to": "ocr"
+      },
+      {
+        "from": "resources/capture",
+        "to": "capture"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png",
+      "artifactName": "Ta-Windows-${version}-${arch}-Setup.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "拓 Ta",
+      "runAfterFinish": true,
+      "deleteAppDataOnUninstall": false,
+      "installerLanguages": [
+        "zh_CN",
+        "en_US"
+      ],
+      "language": "2052"
+    }
+  }
+}

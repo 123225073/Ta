@@ -1,0 +1,10 @@
+node_modules/
+dist/
+dist-electron/
+release/
+resources/ocr/
+build/icon.png
+renderer/public/icon.png
+output/
+.playwright-cli/
+*.log

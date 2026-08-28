@@ -1,366 +1,160 @@
 <div align="center">
 
-<img src="./Resources/Brand/Ta-AppIcon.png" width="128" alt="拓 Ta Logo">
+<img src="./Resources/Brand/Ta-AppIcon.png" width="112" alt="拓 Ta">
 
-# 拓 · Ta
+# 拓 Ta · Windows 截图工具
 
-### 一千多年前，纸墨拓下碑文。今天，AI 拓下屏幕上的信息。
+### 框住它，拓下来。
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-D6402F.svg)](./LICENSE)
-[![Platform: macOS 14+](https://img.shields.io/badge/macOS-14%2B-1A1A1A.svg)](https://www.apple.com/macos/)
-[![Swift: 6.2](https://img.shields.io/badge/Swift-6.2-F05138.svg)](https://www.swift.org/)
-[![Release: v1.0.1](https://img.shields.io/badge/Release-v1.0.1-C98B2E.svg)](https://github.com/kangarooking/Ta/releases/tag/v1.0.1)
+[![Windows](https://img.shields.io/badge/Windows-10%2F11-1676D2.svg)](./windows/README.md)
+[![Version](https://img.shields.io/badge/Windows-v1.1.11-E62D1B.svg)](./docs/release-notes-v1.1.11.md)
+[![Electron](https://img.shields.io/badge/Electron-44-47848F.svg)](./windows/package.json)
+[![License](https://img.shields.io/badge/License-MIT-D6402F.svg)](./LICENSE)
 
-**AI 原生截图工具：截图、取字、AI 识图、翻译、长截图、钉图与标注，一步完成。**
-
-目前暂时仅支持 **macOS**；Windows 版本正在努力制作中。
+截图、取字、翻译、AI 识图、长截图、钉图与标注，集中在一个 Windows 工具里。
 
 [简体中文](./README.md) · [English](./README.en.md) · [日本語](./README.ja.md)
 
 </div>
 
-![拓主界面](./docs/brand/Ta-home-preview.png)
+## 项目说明
 
-## 一千多年前，中国人就有了自己的“截图”
+这个仓库是 [kangarooking/Ta](https://github.com/kangarooking/Ta) 的 Windows 分支改造。原项目的 macOS/Swift 源码仍保留在 `Sources/`、`Tests/` 和 `Package.swift` 中；当前仓库的主要交付物是 `windows/` 下重新实现的 Windows 10/11 x64 客户端。
 
-在没有相机、复印机和现代印刷技术的年代，人们遇到过一个很实际的问题：石碑上的字那么好，怎样才能把它带走？
+Windows 版不是把 macOS 程序套壳运行，而是针对 Windows 重新实现了屏幕捕获、DPI、多显示器、全局快捷键、托盘、剪贴板、安全存储、安装和窗口生命周期。
 
-他们把纸覆在碑上，再用墨包轻轻扑打。纸揭下来，文字便离开石头，跟着人回家。这门手艺叫作**拓印**，已经流传千余年。它像一种古老的截图：看见什么，就把什么留住。
+## Windows v1.1.11 能做什么
 
-「拓」这个字本身也在讲这件事：`扌 + 石`，一只手按在石头上。中文名为「拓」，读作 `tà`；英文名为 **Ta**。
+- **通用截图**：鼠标框选后松开即保留选区，可移动、八方向缩放，双击或按 `Enter` 完成。
+- **智能框选**：鼠标移动到窗口时自动识别可见边框；单击锁定，也可以继续手动框选。
+- **原色预览**：选区保持截图源原色和清晰度，选区外使用四块中性遮罩置灰。
+- **快速截图**：完成后自动复制到剪贴板并保存到“最近拓片”，不打开编辑页、不阻挡用户继续粘贴。
+- **本地取字**：内置简体中文和英文离线 OCR；普通截图和 OCR 不需要联网。
+- **AI 识图与翻译**：支持 OpenAI-compatible、DeepSeek/兼容服务、Anthropic Claude 和 Google Gemini；实际调用的模型由“设置 → 模型服务”中当前选中的服务、Base URL 和模型名共同决定。
+- **同图结果缓存**：同一张截图在取字、AI 识图和翻译之间切换时保留已完成结果；只有点击“重新识别”才再次请求。
+- **标注**：矩形、椭圆、箭头、画笔、高亮、文字、编号、马赛克、模糊、橡皮、撤销和重做。大图进入标注时先完整适配视口，也可手动缩放。
+- **钉图**：置顶显示，支持拖动、旋转、翻转、透明度、鼠标穿透恢复和关闭，并避免在任务栏产生一排重复图标。
+- **滚动长截图**：自动滚动、帧去重与拼接；复杂动画页面可能仍需人工检查接缝。
+- **可录制快捷键**：直接按下 `Alt + F1` 等组合键即可写入设置，保存时检查冲突并注册。
+- **可控隐藏**：截图前可选择自动隐藏 Ta、保留 Ta 或每次询问。自动隐藏会从 Windows 合成画面中完全移除 Ta，其他软件不会被隐藏。
 
-今天，石碑变成了屏幕。屏幕上的信息更多，也消失得更快。Ta 做的仍是同一件事：框住它，拓下来——文字可以复制、翻译，图片可以标注、钉在眼前；截一张长图，就像把整通碑从头拓到尾；AI 帮你理解内容，就像随身带着一位金石学家。
+## 默认快捷键
 
-> 仓颉造字，拓印传字。字被造出来只是开始，被留住、被读懂、被带走，才算完成。
+| 功能 | Windows 默认值 |
+|---|---|
+| 极速取字 | `Ctrl + Shift + 1` |
+| 通用截图 | `Ctrl + Shift + 2` |
+| 快速截图 | `Ctrl + Shift + 3` |
+| 截图钉图 | `Ctrl + Shift + 4` |
+| 滚动长截图 | `Ctrl + Shift + 5` |
+| 截图翻译 | `Ctrl + Shift + 6` |
 
-## 我为什么做 Ta
+快捷键都可以在设置页重新录制。为避免影响日常输入，普通字母和数字需要搭配 `Ctrl`、`Alt`、`Shift` 或 `Win`；`F1`–`F24` 可以单独使用。
 
-截图工具是我几乎每天都在使用的软件。市面上的选择很多，有免费的，也有收费的；但用了这么多之后，我始终没有找到一个能满足全部需求的工具：取字、翻译、长截图、钉图、标注和图片美化，往往分散在不同应用和不同操作链路里。
-
-所以，我决定自己做一个。
-
-我也发现，大多数截图软件只是附加了一个 OCR 或 AI 按钮，还没有真正让 AI 深度参与截图后的工作。Ta 希望持续结合 AI，在满足我自己真实需求的同时，也和大家一起把截图这件每天都要做的小事，变得更简单、更聪明。
-
-## 什么是“AI 原生截图工具”
-
-AI 原生，不是给传统截图软件外挂一个聊天框，而是让 AI 从截图完成的那一刻起就参与工作：
-
-- **拓下来**：普通截图、窗口内容和滚动长图，都能快速捕获；
-- **读出来**：使用本地 OCR 或多模态模型提取文字、表格、公式与代码；
-- **讲明白**：直接翻译、理解和结构化截图中的信息；
-- **留在手边**：一键复制、钉图、标注、美化、保存或继续处理；
-- **尊重边界**：本地识别优先，云端处理前明确提示，API Key 保存在 macOS Keychain。
-
-## 它解决了什么问题
-
-- **截图后还要二次处理**——取字、翻译、复制、保存和标注集中在同一条操作链路。
-- **长截图不稳定**——支持手动或自动滚动、重复帧过滤、固定区域消除、接缝检查与人工修正。
-- **OCR 方案难以取舍**——Apple Vision、PaddleOCR 与远程视觉模型可以按速度、结构和隐私要求切换。
-- **截图标注效率低**——提供接近 Snipaste 的原位标注、对象移动缩放、马赛克涂抹和钉图体验。
-- **云端识图缺少边界**——默认本地处理；需要上传时明确提示，并把 API Key 保存在 macOS Keychain。
-
-## 经典用法
-
-下面的图片均来自 Ta 当前版本的实际运行界面。
-
-<table>
-  <tr>
-    <td width="50%" valign="top">
-      <strong>框选一次，选择下一步</strong><br><br>
-      <img src="./docs/showcase/02-capture-toolbar.png" alt="Ta 通用截图操作栏">
-      <br>截图后直接取字、AI 识图、翻译、复制、钉图、标注、美化或保存。
-    </td>
-    <td width="50%" valign="top">
-      <strong>配置自己的 AI 模型</strong><br><br>
-      <img src="./docs/showcase/05-ai-model-settings.png" alt="Ta AI 模型设置">
-      <br>支持多种 Provider 协议，API Key 只保存在 macOS Keychain。
-    </td>
-  </tr>
-  <tr>
-    <td width="50%" valign="top">
-      <strong>原位标注</strong><br><br>
-      <img src="./docs/showcase/03-annotation-tools.png" alt="Ta 原位标注工具栏">
-      <br>箭头、文字、高亮、两种马赛克和对象直接缩放，都在截图原位置完成。
-    </td>
-    <td width="50%" valign="top">
-      <strong>把参考内容钉在眼前</strong><br><br>
-      <img src="./docs/showcase/04-pin-image.png" alt="Ta 钉图案例">
-      <br>钉图保持置顶，可移动、缩放、调整透明度，也可双击关闭。
-    </td>
-  </tr>
-</table>
-
-## 它是怎么工作的
-
-Ta 使用一条原生 macOS 截图链路：
+## 使用流程
 
 ```text
-全局快捷键
-    ↓
-框选屏幕区域
-    ↓
-ScreenCaptureKit 捕获（排除 Ta 自身窗口）
-    ↓
-┌───────────────┬────────────────────┐
-│ 本地 OCR      │ 多模态视觉模型       │
-│ Apple Vision  │ OpenAI-compatible  │
-│ PaddleOCR     │ Claude / Gemini    │
-└───────────────┴────────────────────┘
-    ↓
-复制 · 翻译 · 钉图 · 标注 · 长图 · 保存
+快捷键或“开始截图”
+        ↓
+冻结当前桌面（全分辨率无损 PNG）
+        ↓
+窗口自动框选，或鼠标拖动自定义选区
+        ↓
+松开后移动/缩放，双击或 Enter 确认
+        ↓
+自动复制并保存
+        ↓
+按需取字、识图、翻译、标注、钉图或另存
 ```
 
-识别期间如果用户已经复制了其他内容，Ta 不会覆盖新的剪贴板内容。没有识别到文字时，可以安全回退为复制 PNG。
+截图覆盖层在程序启动后预热。Windows 原生辅助进程使用 GDI 冻结桌面，并在自动隐藏模式下等待 DWM 完成 Ta 的透明化与隐藏，再读取屏幕，因此不会把主窗口的淡化残影截进去。
 
-## 核心功能
+## 安装与构建
 
-### 截图与快捷操作
+### 使用安装包
 
-- 通用截图操作栏：框选后选择取字、AI 识图、翻译、复制、钉图、标注、美化或保存。
-- 极速取字、复制图片、截图翻译、截图钉图与滚动长截图均有独立全局快捷键。
-- 所有快捷键都可以在设置中录制、检查冲突并恢复默认值。
-- 框选过程中可用鼠标右键或 `Escape` 退出，不生成文件也不修改剪贴板。
-- 截图时自动隐藏 Ta 的主界面，不抢焦点、不把应用自身截进去。
+Windows 10 22H2 或 Windows 11 x64 用户可运行本项目构建出的：
 
-### OCR 与 AI 识图
+```text
+windows/release/Ta-Windows-1.1.11-x64-Setup.exe
+```
 
-- **Apple Vision**：默认的本地 OCR，支持中英文与常见文本布局。
-- **PaddleOCR 增强包**：Apple Silicon 离线运行，支持一键安装、更新、校验、预热和常驻模型复用。
-- **DeepSeek-OCR-2**：连接用户自行部署的 vLLM、SGLang 或兼容视觉服务，不在 Mac 上静默下载大型权重。
-- **多模态模型**：支持 OpenAI-compatible、Azure OpenAI、Anthropic Claude 与 Google Gemini 协议。
-- 任务模板包括精确取字、代码解释、Markdown/CSV 表格、LaTeX 公式与通用识图。
-- 支持 OCR、多模态和“本地优先、低置信度再确认上传”的智能路由。
+安装器创建桌面和开始菜单快捷方式。覆盖安装不会主动删除用户设置、加密后的 API Key 或截图历史；卸载配置为保留用户数据。
 
-### 截图翻译
-
-- 源语言与目标语言可自定义，默认自动检测并翻译为简体中文。
-- 直接截图翻译后把译文复制到剪贴板。
-- 截图工具栏支持纯文字、原图文字替换与原图下方双语对照。
-- 图片文字定位和结果合成在本地完成，只把需要翻译的文字发送给配置的模型。
-
-### AI 美化（开发中）
-
-- 面向公众号、社交媒体和产品文档，自动补齐留白、圆角、阴影、背景与常用版式。
-- 计划支持智能标注、隐私信息遮挡、多尺寸导出，以及根据截图内容生成匹配的背景或装饰元素。
-- 当前版本已经预留“美化”入口，完整的 AI 美化工作流仍在开发中，不会把尚未完成的能力标为可用。
-
-### 滚动长截图
-
-- 支持浏览器、聊天窗口和常见桌面应用的手动/自动滚动捕获。
-- 自动匹配相邻帧、过滤重复画面并识别滚动方向。
-- 检测并消除固定标题栏、底栏和输入框。
-- 完成前提供接缝检查，可按 `±1` / `±10 px` 人工修正。
-- 支持超长图片分段，降低内存和导出压力。
-
-### 标注与钉图
-
-- 原位半透明遮罩标注，截图保持在原位置。
-- 矩形、椭圆、箭头、画笔、高亮、文字、编号、马赛克、模糊、橡皮和局部放大。
-- 标注对象可以直接选择、移动、缩放、旋转和重新编辑。
-- 马赛克支持框选与画笔涂抹两种方式。
-- 钉图支持拖动、缩放、透明度、旋转、翻转、滤镜、裁剪、鼠标穿透、分组、隐藏/恢复与双击关闭。
-- 可从截图、剪贴板图片、文字、HTML 或文件生成钉图。
-
-## 快速开始
-
-### 环境要求
-
-- macOS 14 或更高版本
-- Apple Silicon 或 Intel Mac（PaddleOCR 发行增强包目前面向 Apple Silicon）
-- Xcode 26，或兼容 Swift 6.2 的工具链
-
-### 下载安装包
-
-[**下载 Ta v1.0.1（macOS 通用版 DMG）**](https://github.com/kangarooking/Ta/releases/latest/download/Ta-1.0.1-macOS-universal.dmg)
-
-安装包同时支持 Apple Silicon 与 Intel Mac。打开 DMG 后，把「拓」拖入 `Applications` 即可。当前版本尚未完成 Apple notarization；首次启动请在 Finder 中按住 Control 点击「拓」，选择“打开”，再确认一次。
+> `release/` 是本机构建目录，不提交到 Git。仓库若尚未发布 GitHub Release，请按下面步骤从源码构建。
 
 ### 从源码构建
 
-```bash
-git clone https://github.com/kangarooking/Ta.git
-cd Ta
-swift test
-./scripts/build-app.sh
-open "artifacts/拓.app"
+要求：Windows 10/11 x64、Node.js 22+、npm。
+
+```powershell
+cd windows
+npm ci
+npm run dist
 ```
 
-首次运行需要允许“屏幕与系统音频录制”权限。只有使用自动滚动长截图时，才需要额外开启“辅助功能”权限。
+常用验证命令：
 
-### 默认快捷键
-
-| 功能 | 快捷键 |
-|------|--------|
-| 极速取字 | `⇧⌥⌘1` |
-| 通用截图 | `⇧⌥⌘2` |
-| 复制图片 | `⇧⌥⌘3` |
-| 截图并钉住 | `⇧⌥⌘4` |
-| 滚动长截图 | `⇧⌥⌘5` |
-| 截图翻译 | `⇧⌥⌘6` |
-
-进入“设置 → 快捷键”可以重新录制任意组合键。冲突快捷键会被拒绝或自动回滚。
-
-## 让 Agent 调用 Ta
-
-Ta 现在也可以作为 Agent 的视觉输入层，以三种形式提供能力：
-
-- **Ta Agent Skill**：教支持 Agent Skills 的 Agent 正确组合截图、OCR、识图和翻译流程；
-- **`ta` CLI**：提供稳定的 JSON 命令，可用于 Shell、脚本和通用 Agent；
-- **`dsh-ta`**：真正的 DeepSeek Harness 原生 Cordis Plugin + Bundle，直接注册截图与理解工具。
-
-它们共同调用由「拓.app」托管的本机 Bridge。普通 Agent 截图不会弹出拓、抢焦点、移动鼠标或发送键盘事件；权限、模型和 API Key 仍由拓统一管理。
-
-一条命令同时安装或更新 `ta` CLI 与 Ta Agent Skill：
-
-```bash
-curl -fsSL --retry 3 --retry-all-errors --retry-delay 1 https://github.com/kangarooking/Ta/releases/latest/download/install.sh | bash
+```powershell
+npm test
+npm run typecheck
+npm run test:preview-fidelity
+npm run smoke:e2e
 ```
 
-安装器会校验 SHA-256，把 CLI 安装到 `~/.local/bin/ta`，并把 Skill 安装到 Codex 与通用 Agent Skills 目录。安装后重新启动 Agent，再检查连接：
+详细说明见 [Windows 构建与使用文档](./windows/README.md)。
 
-```bash
-ta status --json
-ta capture frontmost --json
-ta ocr last --json
-```
+## 模型与隐私
 
-在“设置 → Agent”可以关闭自动化、禁止云端、配置隐私 App 黑名单、清理缓存并查看不包含识别正文的最近调用记录。安装 CLI、Skill 和 DeepSeek Harness 插件的完整步骤见 [Agent 集成指南](./docs/agent-integration.md)。
-
-## 隐私与安全
-
-- 普通截图与 Apple Vision OCR 始终在本机完成。
-- PaddleOCR 增强包安装后在本机离线运行。
-- 只有主动选择远程 OCR、多模态识图或翻译时，选区或文字才会发送到用户配置的服务。
-- 低置信度智能路由不会静默上传，必须由用户再次确认。
-- API Key 只保存在 macOS Keychain，不写入偏好设置、日志或仓库。
-- Ta 不持续录屏，只读取用户主动框选的区域。
-- Agent Bridge 只监听当前用户可访问的本机 Unix Socket；审计不保存请求参数、识别正文或图片数据。
+- 普通截图、快速截图、标注、钉图、长截图和本地 OCR 不上传图片。
+- 只有用户主动执行 AI 识图或截图翻译时，图片才会发送到当前配置的服务。
+- API Key 通过 Electron `safeStorage` 使用 Windows 系统能力加密保存；仓库、日志和验收文档不记录明文密钥。
+- 可开启“每次云端识图前确认”，防止误把敏感截图发送到第三方服务。
+- OpenAI-compatible 服务可填写自定义 Base URL 和模型名，例如自建代理或统一模型网关；能否识图取决于该端点是否真正支持图片输入。
 
 ## 工程结构
 
 ```text
 Ta/
-├── README.md / README.en.md / README.ja.md
-├── Package.swift
-├── Resources/                 图标、Info.plist 与品牌资源
-├── Sources/
-│   ├── AIScreenshotCore/
-│   │   ├── OCR/               Vision OCR、布局与内容分类
-│   │   ├── LongCapture/       位移匹配、拼接与进度检测
-│   │   ├── Recognition/       OCR/视觉/翻译 Provider 客户端
-│   │   └── Clipboard/         剪贴板安全提交策略
-│   ├── AIScreenshotApp/
-│   │   ├── Capture/           框选、捕获与长截图会话
-│   │   ├── Editor/            标注编辑器
-│   │   ├── Recognition/       OCR 增强包与多模态路由
-│   │   ├── System/            快捷键、权限、Keychain、剪贴板
-│   │   └── UI/                主界面、菜单栏、设置、钉图与结果栏
-│   ├── TaAgentContracts/      Bridge 协议
-│   ├── TaAgentClient/         本机 Bridge 客户端
-│   └── TaCLI/                 ta CLI
-├── Integrations/              Agent Skill 与 DeepSeek Harness 原生插件
-├── Tests/                     Core 与 App 测试
-├── ocr-packs/paddleocr/       可选 PaddleOCR 增强包构建定义
-├── scripts/                   构建、运行和增强包脚本
-└── docs/                      PRD、研究、验证记录与实现计划
+├── windows/                    Windows Electron 客户端（当前主要交付）
+│   ├── electron/               主进程、截图、OCR、AI、存储与窗口生命周期
+│   ├── renderer/src/           工作台、设置、框选层、结果页、标注与钉图 UI
+│   ├── resources/capture/      Windows 原生截图辅助进程
+│   └── scripts/                构建、回归、E2E 与安装验收
+├── docs/                       Windows 版本说明、架构和对抗审查
+├── Sources/ / Tests/           上游 macOS/Swift 实现（保留）
+├── Resources/                  公共品牌资源
+└── LICENSE                     MIT
 ```
 
-## 当前状态
+## 当前边界
 
-Ta v1.0.1 是当前公开版本，提供同时支持 Apple Silicon 与 Intel Mac 的通用 DMG 和 ZIP。当前发布包尚未完成 Apple notarization，因此首次启动需要在 Finder 中按住 Control 点击 App 并选择“打开”。
+- Windows 受 DRM、系统内容保护或显卡驱动保护的视频区域，仍可能由操作系统强制输出为黑色；本项目不会绕过系统保护。
+- 每块显示器都有独立覆盖层；当前不支持一个选区横跨两块物理显示器。
+- 滚动长截图面对视频、持续动画、半透明浮层或大幅重排页面时，拼接结果可能需要人工复核。
+- AI 识图效果、速度和费用由用户选择的服务与模型决定。
+- Windows 安装包尚未进行商业代码签名，SmartScreen 可能显示未知发布者提示。
 
-已知限制：
+## 文档与验收证据
 
-- 当前区域框选以鼠标所在显示器为主，跨屏框选与窗口自动吸附尚未完成。
-- 长截图已具备自动拼接与接缝修正，但持续动画、视频、半透明浮层和大幅重排页面仍可能需要人工调整。
-- 图片翻译使用本地遮盖和重绘；复杂纹理、渐变、阴影、竖排文字和极密集排版可能留下覆盖痕迹。
-- PaddleOCR 公开仓库包含增强包构建定义，不提交体积较大的本地构建产物。
-- v1.0.1 使用 Apple Development 签名；Developer ID 签名和 Apple notarization 仍在推进中。
+- [Windows 版使用与构建](./windows/README.md)
+- [Windows 架构说明](./docs/windows-port-architecture.md)
+- [Windows v1.1.11 更新说明](./docs/release-notes-v1.1.11.md)
+- [Windows v1.1.11 隐藏残影与标注适配对抗审查](./docs/windows-hide-and-editor-adversarial-review-v1.1.11.md)
+- [Windows 完整验收报告](./docs/windows-acceptance.md)
+- [微信式截图技术调研](./docs/wechat-screenshot-research-v1.1.9.md)
 
-## 文档
+历史版本说明与问题复盘保存在 `docs/release-notes-v1.1.*.md` 和 `docs/windows-*-adversarial-review-*.md`，用于防止同类问题回归。
 
-- [产品需求文档（中文）](./AI截图软件-产品需求文档-PRD-v1.0.md)
-- [市场与用户痛点调研（中文）](./AI截图软件市场与用户痛点调研.md)
-- [Alpha 验证记录](./docs/alpha-verification.md)
-- [长截图验收矩阵](./docs/long-capture-acceptance-matrix.md)
-- [PaddleOCR 增强包规范](./docs/ocr-enhancement-pack-spec.md)
-- [Agent Skill、CLI 与 DeepSeek Harness 集成指南](./docs/agent-integration.md)
+## 与上游同步
 
-## 展望：让截图成为 Agent 的眼睛
+建议把 `kangarooking/Ta` 作为 `upstream`，把本仓库作为 Windows 产品分支维护：
 
-Ta 不只想成为一个更全的截图工具。未来，我们希望逐步融入更多 **Agent 能力**，让截图从一张静态图片，变成 AI 理解屏幕和执行任务的入口。
+- 上游 macOS/Swift 更新可以定期 `fetch`，经过评审后按需合并；
+- `windows/` 尽量保持独立，通常不会与 Swift 源码直接冲突；
+- README、品牌资源、公共协议和 `docs/` 可能发生冲突，应逐项人工处理；
+- 不建议无条件自动同步，更不应使用强制推送覆盖 Windows 历史。
 
-例如，Agent 可以在你确认后：
+## 开源说明
 
-- 识别截图中的任务、日期、链接和表格，并整理成待办、笔记或结构化数据；
-- 理解界面状态，给出下一步操作建议，或串联翻译、标注、美化和导出流程；
-- 自动发现并遮挡手机号、邮箱、头像等敏感信息；
-- 把长对话、代码报错、产品页面或研究材料转成可继续编辑的工作成果；
-- 记住你常用的截图处理方式，把重复操作变成可复用的个人工作流。
-
-Agent 能力仍会坚持明确授权、过程可见、结果可撤销。Ta 希望做的不是替你接管屏幕，而是让你更快地把屏幕上的信息带走、读懂，并继续使用。
-
-## Roadmap
-
-- [x] 原生截图、OCR、复制与自定义快捷键
-- [x] 长截图、接缝检查与自动滚动
-- [x] 原位标注、马赛克画笔与钉图
-- [x] 截图翻译与多 Provider 模型配置
-- [x] PaddleOCR 可选离线增强包协议
-- [x] Agent Skill、`ta` CLI 与 DeepSeek Harness 原生插件
-- [ ] 多显示器跨屏框选与窗口吸附
-- [ ] 公众号截图模板与参数化美化
-- [ ] AI 美化、智能隐私遮挡与多尺寸生成
-- [ ] 历史记录、搜索与结果重新复制
-- [ ] 可确认、可撤销的截图 Agent 工作流
-- [ ] Windows 版本
-- [x] macOS 通用 DMG、ZIP 与校验文件
-- [ ] Developer ID 签名与 Apple notarization
-
-## 免费、开源，也希望和大家一起做
-
-Ta 采用 [MIT 协议](./LICENSE) 免费开源。任何人都可以下载源码、构建、使用、修改和分发。
-
-如果你在截图时遇到过 Ta 尚未解决的问题，欢迎提交 Issue；如果你愿意一起完善它，也欢迎发送 Pull Request。开始修改前请阅读 [CONTRIBUTING.md](./CONTRIBUTING.md)，并尽量为行为变化补充测试或验收步骤。
-
-如果 Ta 帮你少切换一次应用、少做一步重复操作，欢迎点一个 **Star**。这就是对项目最直接的支持。
-
-## 关于作者
-
-**袋鼠帝 kangarooking** — AI 博主，独立开发者。AI Top 公众号「袋鼠帝 AI 客栈」主理人
-
-<img src="https://raw.githubusercontent.com/kangarooking/cangjie-skill/main/assets/wechat-personal-qr.jpg" width="220" alt="袋鼠帝个人微信二维码">
-
-火山引擎领航 KOL，百度千帆开发者大使，GLM 布道师，Trae 昆明第一任 Fellow
-
-| 平台 | 链接 |
-|------|------|
-| 𝕏 Twitter（袋鼠帝） | https://x.com/aikangarooking |
-| 小红书（袋鼠帝） | https://xhslink.com/m/5YejKvIDBbL |
-| 抖音（袋鼠帝） | https://v.douyin.com/hYpsjphuuKc |
-| 公众号 | 袋鼠帝 AI 客栈 |
-| 视频号 | AI 袋鼠帝 |
-
-微信公众号「袋鼠帝 AI 客栈」二维码：
-
-![](https://raw.githubusercontent.com/kangarooking/cangjie-skill/main/assets/kangarooking-gzh.png)
-
-如果你也想交流 Ta 的使用体验、反馈截图痛点，或一起参与 AI 原生截图工具的开发，欢迎加入 Ta 企微交流群：
-
-<img src="https://raw.githubusercontent.com/kangarooking/Ta/main/assets/wecom-ta-group-qr.png" width="220" alt="Ta 企微交流群二维码">
-
-## ⭐ Star History
-
-如果 Ta 对你有帮助，欢迎点一个 Star。
-
-<a href="https://www.star-history.com/?repos=kangarooking%2FTa&type=date&legend=top-left">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=kangarooking/Ta&type=date&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=kangarooking/Ta&type=date&legend=top-left" />
-   <img alt="Ta Star History Chart" src="https://api.star-history.com/chart?repos=kangarooking/Ta&type=date&legend=top-left" />
- </picture>
-</a>
-
-## License
-
-MIT，详见 [LICENSE](./LICENSE)。
+Ta 使用 [MIT License](./LICENSE)。感谢原项目作者和所有贡献者。Windows 改造继续沿用“拓”的品牌与产品理念，并把实际实现、已验证能力和已知边界写进仓库，避免把规划中的功能描述成已完成。
