@@ -1,5 +1,9 @@
 export type CaptureAction = 'capture' | 'ocr' | 'copy' | 'pin' | 'long' | 'translate'
 export type CaptureWindowPolicy = 'hide-ta' | 'keep-ta' | 'ask'
+export type AppTheme = 'dark' | 'light'
+export type ExternalScreenshotApp = 'feishu' | 'weixin' | 'qq'
+export type ClipboardImportMode = 'strict'
+export type AssetSource = 'ta-capture' | 'external-capture' | 'paste' | 'import' | 'edited' | 'beautified'
 
 export type ProviderKind = 'openai' | 'anthropic' | 'gemini'
 
@@ -13,6 +17,7 @@ export interface ProviderProfile {
 }
 
 export interface AppSettings {
+  theme: AppTheme
   activeProviderId: string
   providers: ProviderProfile[]
   hotkeys: Record<CaptureAction, string>
@@ -25,6 +30,14 @@ export interface AppSettings {
   launchMinimized: boolean
   captureWindowPolicy: CaptureWindowPolicy
   smartSelectionEnabled: boolean
+  storageRoot: string
+  externalCapture: {
+    enabled: boolean
+    apps: Record<ExternalScreenshotApp, {
+      enabled: boolean
+      mode: ClipboardImportMode
+    }>
+  }
 }
 
 export interface PersistedSettings extends AppSettings {
@@ -34,11 +47,51 @@ export interface PersistedSettings extends AppSettings {
 export interface HistoryItem {
   id: string
   createdAt: string
+  dateKey: string
   width: number
   height: number
   action: CaptureAction | 'edited' | 'beautified'
+  source: AssetSource
+  sourceApp?: ExternalScreenshotApp
+  title: string
   fileName: string
+  relativePath: string
+  contentHash: string
   thumbnailUrl?: string
+}
+
+export interface LibraryListQuery {
+  limit?: number
+  cursor?: string
+  search?: string
+  date?: string
+  source?: AssetSource
+}
+
+export interface LibraryListResult {
+  items: HistoryItem[]
+  nextCursor?: string
+  totalCount: number
+}
+
+export interface LibraryStats {
+  count: number
+  totalBytes: number
+  rootDirectory: string
+  freeBytes: number
+  legacyMigration?: {
+    imported: number
+    skipped: number
+    failed: number
+    errors: string[]
+  }
+}
+
+export interface LibraryExportResult {
+  canceled: boolean
+  destinationDirectory?: string
+  exportedCount: number
+  missingIds: string[]
 }
 
 export interface SelectionRect {
@@ -88,6 +141,7 @@ export interface LongCaptureProgress {
 }
 
 export const defaultSettings: AppSettings = {
+  theme: 'dark',
   activeProviderId: 'fengsha-cpa',
   providers: [
     {
@@ -143,4 +197,13 @@ export const defaultSettings: AppSettings = {
   launchMinimized: false,
   captureWindowPolicy: 'hide-ta',
   smartSelectionEnabled: true,
+  storageRoot: '',
+  externalCapture: {
+    enabled: false,
+    apps: {
+      feishu: { enabled: false, mode: 'strict' },
+      weixin: { enabled: false, mode: 'strict' },
+      qq: { enabled: false, mode: 'strict' },
+    },
+  },
 }

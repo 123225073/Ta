@@ -1,14 +1,19 @@
 import {
   AppSettings,
+  AppTheme,
   CaptureAction,
   CaptureResult,
   CaptureWindowPolicy,
+  AssetSource,
+  ExternalScreenshotApp,
+  LibraryListQuery,
   ProviderKind,
   SelectionRect,
 } from './contracts'
 
 export const MAX_PNG_BYTES = 80 * 1024 * 1024
-export const MAX_IMAGE_PIXELS = 120_000_000
+// Covers a three-monitor 4K desktop while keeping worst-case decode memory bounded.
+export const MAX_IMAGE_PIXELS = 32_000_000
 export const MAX_TEXT_LENGTH = 2_000_000
 
 const captureActions = new Set<CaptureAction>(['capture', 'ocr', 'copy', 'pin', 'long', 'translate'])
@@ -17,7 +22,11 @@ const providerKinds = new Set<ProviderKind>(['openai', 'anthropic', 'gemini'])
 const aiModes = new Set(['vision', 'translate', 'custom'])
 const pinCommands = new Set(['close', 'opacity', 'passthrough', 'interactive', 'move-start', 'move', 'move-end'])
 const captureWindowPolicies = new Set<CaptureWindowPolicy>(['hide-ta', 'keep-ta', 'ask'])
-const historyIdPattern = /^\d{13}-[0-9a-f]{8}$/
+const appThemes = new Set<AppTheme>(['dark', 'light'])
+const externalScreenshotApps = new Set<ExternalScreenshotApp>(['feishu', 'weixin', 'qq'])
+const clipboardImportModes = new Set(['strict'])
+const assetSources = new Set<AssetSource>(['ta-capture', 'external-capture', 'paste', 'import', 'edited', 'beautified'])
+const historyIdPattern = /^\d{13}-[0-9a-f]{8}(?:[0-9a-f]{8})?$/
 
 function inputError(message: string): never {
   throw new Error(`输入无效：${message}`)
@@ -116,6 +125,55 @@ export function isHistoryId(value: unknown): value is string {
   return typeof value === 'string' && historyIdPattern.test(value)
 }
 
+export function parseHistoryIds(value: unknown, maximum = 10_000) {
+  if (!Array.isArray(value) || value.length < 1 || value.length > maximum) inputError(`图片编号列表必须包含 1 到 ${maximum} 项。`)
+  const ids = value.map(parseHistoryId)
+  if (new Set(ids).size !== ids.length) inputError('图片编号不能重复。')
+  return ids
+}
+
+export function parseAssetTitle(value: unknown) {
+  const title = boundedString(value, '图片名称', 180)
+  if (/[\\/:*?"<>|]/.test(title) || title === '.' || title === '..') inputError('图片名称包含 Windows 文件名不允许的字符。')
+  return title
+}
+
+export function parseLibraryListQuery(value: unknown): LibraryListQuery {
+  const input = value === undefined ? {} : objectValue(value, '素材筛选条件')
+  const query: LibraryListQuery = {}
+  if (input.limit !== undefined) query.limit = integerInRange(input.limit, '每页数量', 1, 200)
+  if (input.cursor !== undefined) query.cursor = boundedString(input.cursor, '分页游标', 1024)
+  if (input.search !== undefined) query.search = boundedString(input.search, '搜索内容', 180, true)
+  if (input.date !== undefined) {
+    const date = boundedString(input.date, '日期', 10)
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date)
+    if (!match) inputError('日期格式无效。')
+    const [, yearText, monthText, dayText] = match
+    const year = Number(yearText); const month = Number(monthText); const day = Number(dayText)
+    const parsed = new Date(year, month - 1, day)
+    if (parsed.getFullYear() !== year || parsed.getMonth() !== month - 1 || parsed.getDate() !== day) inputError('日期格式无效。')
+    query.date = date
+  }
+  if (input.source !== undefined) {
+    if (!assetSources.has(input.source as AssetSource)) inputError('素材来源无效。')
+    query.source = input.source as AssetSource
+  }
+  return query
+}
+
+export function parseLibraryExportSelection(value: unknown):
+  | { mode: 'ids'; ids: string[] }
+  | { mode: 'filter'; filter: Pick<LibraryListQuery, 'search' | 'date'>; excludedIds: string[] } {
+  const input = objectValue(value, '导出选择')
+  if (input.mode === 'ids') return { mode: 'ids', ids: parseHistoryIds(input.ids) }
+  if (input.mode !== 'filter') inputError('导出选择模式无效。')
+  const filter = parseLibraryListQuery(input.filter)
+  if (!Array.isArray(input.excludedIds) || input.excludedIds.length > 10_000) inputError('导出排除列表无效。')
+  const excludedIds = input.excludedIds.map(parseHistoryId)
+  if (new Set(excludedIds).size !== excludedIds.length) inputError('导出排除编号不能重复。')
+  return { mode: 'filter', filter: { search: filter.search, date: filter.date }, excludedIds }
+}
+
 export function parseExternalUrl(value: unknown) {
   if (typeof value !== 'string' || value.length > 2048) inputError('外部链接无效。')
   let url: URL
@@ -156,8 +214,20 @@ export function parseSettingsUpdate(value: unknown): SettingsUpdate {
   if (!seen.has(activeProviderId)) inputError('当前模型服务不存在。')
   const hotkeyInput = objectValue(input.hotkeys, '快捷键')
   const hotkeys = Object.fromEntries([...captureActions].map((action) => [action, boundedString(hotkeyInput[action], `${action} 快捷键`, 100, true)])) as AppSettings['hotkeys']
+  if (!appThemes.has(input.theme as AppTheme)) inputError('界面主题无效。')
   if (!captureWindowPolicies.has(input.captureWindowPolicy as CaptureWindowPolicy)) inputError('截图窗口策略无效。')
+  const externalCaptureInput = objectValue(input.externalCapture, '外部截图自动收集')
+  const externalAppsInput = objectValue(externalCaptureInput.apps, '外部截图软件')
+  const externalApps = Object.fromEntries([...externalScreenshotApps].map((app) => {
+    const rule = objectValue(externalAppsInput[app], `${app} 自动收集规则`)
+    // v1.2 briefly exposed an unsafe compatibility mode. Preserve the rest of
+    // an existing settings file while migrating that value back to strict.
+    const mode = rule.mode === 'all-images' ? 'strict' : rule.mode
+    if (!clipboardImportModes.has(mode as string)) inputError(`${app} 自动收集模式无效。`)
+    return [app, { enabled: booleanValue(rule.enabled, `${app} 自动收集`), mode: mode as 'strict' }]
+  })) as AppSettings['externalCapture']['apps']
   const settings: SettingsUpdate = {
+    theme: input.theme as AppTheme,
     activeProviderId,
     providers,
     hotkeys,
@@ -170,6 +240,11 @@ export function parseSettingsUpdate(value: unknown): SettingsUpdate {
     launchMinimized: booleanValue(input.launchMinimized, '最小化启动'),
     captureWindowPolicy: input.captureWindowPolicy as CaptureWindowPolicy,
     smartSelectionEnabled: booleanValue(input.smartSelectionEnabled, '自动识别窗口边框'),
+    storageRoot: boundedString(input.storageRoot, '素材保存路径', 32_767, true),
+    externalCapture: {
+      enabled: booleanValue(externalCaptureInput.enabled, '外部截图自动收集'),
+      apps: externalApps,
+    },
   }
   if (input.apiKeys !== undefined) {
     const apiKeysInput = objectValue(input.apiKeys, 'API Key')

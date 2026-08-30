@@ -2,19 +2,21 @@ import { app, nativeImage, safeStorage } from 'electron'
 import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
+import sharp from 'sharp'
 import {
+  AssetSource,
   AppSettings,
   CaptureAction,
   HistoryItem,
+  LibraryListQuery,
+  LibraryListResult,
+  LibraryStats,
   PersistedSettings,
   ProviderProfile,
   defaultSettings,
 } from './contracts'
-import { isHistoryId, parseSettingsUpdate, SettingsUpdate } from './validation'
-
-interface HistoryIndex {
-  items: HistoryItem[]
-}
+import { MAX_IMAGE_PIXELS, parseSettingsUpdate, SettingsUpdate } from './validation'
+import { AssetLibrary, type LibraryAsset, type LibraryAssetAction, type LibraryAssetSource, type LibrarySourceApp } from './library'
 
 function ensureDirectory(directory: string) {
   fs.mkdirSync(directory, { recursive: true })
@@ -27,20 +29,35 @@ function cloneDefaults(): AppSettings {
 export class TaStore {
   private readonly dataDirectory: string
   private readonly settingsPath: string
-  private readonly historyDirectory: string
-  private readonly historyIndexPath: string
+  private readonly legacyHistoryDirectory: string
+  private readonly thumbnailDirectory: string
   private settings: PersistedSettings
-  private history: HistoryIndex
+  private readonly library: AssetLibrary
+  private storageMigration: Promise<void> = Promise.resolve()
+  private readonly thumbnailJobs = new Map<string, Promise<string | undefined>>()
+  private activeThumbnailJobs = 0
+  private readonly thumbnailWaiters: Array<() => void> = []
 
   constructor() {
     this.dataDirectory = app.getPath('userData')
     this.settingsPath = path.join(this.dataDirectory, 'settings.json')
-    this.historyDirectory = path.join(this.dataDirectory, 'history')
-    this.historyIndexPath = path.join(this.historyDirectory, 'index.json')
+    this.legacyHistoryDirectory = path.join(this.dataDirectory, 'history')
+    this.thumbnailDirectory = path.join(this.dataDirectory, 'library', 'thumbnails')
     ensureDirectory(this.dataDirectory)
-    ensureDirectory(this.historyDirectory)
+    ensureDirectory(this.thumbnailDirectory)
     this.settings = this.loadSettings()
-    this.history = this.loadHistory()
+    const requestedRoot = this.settings.storageRoot.trim() || path.join(app.getPath('pictures'), '拓 Ta')
+    this.library = new AssetLibrary({
+      metadataDirectory: path.join(this.dataDirectory, 'library'),
+      rootDirectory: requestedRoot,
+      legacyHistoryDirectory: this.legacyHistoryDirectory,
+    })
+    this.cleanupThumbnailDirectory()
+    const actualRoot = this.library.getRootDirectory()
+    if (this.settings.storageRoot !== actualRoot) {
+      this.settings.storageRoot = actualRoot
+      this.writeSettings()
+    }
   }
 
   private loadSettings(): PersistedSettings {
@@ -55,6 +72,14 @@ export class TaStore {
         ...defaults,
         ...parsed,
         hotkeys: { ...defaults.hotkeys, ...parsed.hotkeys },
+        externalCapture: {
+          ...defaults.externalCapture,
+          ...parsed.externalCapture,
+          apps: {
+            ...defaults.externalCapture.apps,
+            ...parsed.externalCapture?.apps,
+          },
+        },
         providers: [...providerMap.values()],
       })
       const encryptedApiKeys = Object.fromEntries(Object.entries(parsed.encryptedApiKeys ?? {}).filter(([providerId, encrypted]) => (
@@ -68,30 +93,84 @@ export class TaStore {
     }
   }
 
-  private loadHistory(): HistoryIndex {
-    try {
-      const parsed = JSON.parse(fs.readFileSync(this.historyIndexPath, 'utf8')) as HistoryIndex
-      return { items: (parsed.items ?? []).filter((item) => {
-        const filePath = this.safeHistoryFilePath(item.id, item.fileName)
-        return Boolean(filePath && fs.existsSync(filePath))
-      }) }
-    } catch {
-      return { items: [] }
-    }
-  }
-
-  private safeHistoryFilePath(id: unknown, fileName: unknown): string | undefined {
-    if (!isHistoryId(id) || fileName !== `${id}.png`) return undefined
-    const filePath = path.resolve(this.historyDirectory, fileName)
-    return path.dirname(filePath) === path.resolve(this.historyDirectory) ? filePath : undefined
-  }
-
   private writeSettings() {
     fs.writeFileSync(this.settingsPath, JSON.stringify(this.settings, null, 2), 'utf8')
   }
 
-  private writeHistory() {
-    fs.writeFileSync(this.historyIndexPath, JSON.stringify(this.history, null, 2), 'utf8')
+  private toHistoryItem(asset: LibraryAsset): HistoryItem {
+    const source: AssetSource = asset.source === 'legacy' ? 'ta-capture' : asset.source
+    const action = ['paste', 'import'].includes(asset.action) ? 'capture' : asset.action as HistoryItem['action']
+    return { ...asset, action, source, thumbnailUrl: `ta-media://thumbnail/${asset.id}` }
+  }
+
+  private thumbnailPath(id: string) {
+    return path.join(this.thumbnailDirectory, `${id}.png`)
+  }
+
+  private cleanupThumbnailDirectory() {
+    for (const entry of fs.readdirSync(this.thumbnailDirectory, { withFileTypes: true })) {
+      if (!entry.isFile()) continue
+      const isTemporary = entry.name.startsWith('.') && entry.name.endsWith('.tmp')
+      const id = entry.name.endsWith('.png') ? entry.name.slice(0, -4) : ''
+      if (!isTemporary && (!id || this.library.get(id))) continue
+      try { fs.unlinkSync(path.join(this.thumbnailDirectory, entry.name)) } catch { /* best effort */ }
+    }
+  }
+
+  private async withThumbnailSlot<T>(work: () => Promise<T>): Promise<T> {
+    if (this.activeThumbnailJobs >= 2) await new Promise<void>((resolve) => this.thumbnailWaiters.push(resolve))
+    this.activeThumbnailJobs += 1
+    try {
+      return await work()
+    } finally {
+      this.activeThumbnailJobs -= 1
+      this.thumbnailWaiters.shift()?.()
+    }
+  }
+
+  private ensureThumbnail(asset: LibraryAsset): Promise<string | undefined> {
+    const target = this.thumbnailPath(asset.id)
+    if (fs.existsSync(target)) return Promise.resolve(target)
+    const existing = this.thumbnailJobs.get(asset.id)
+    if (existing) return existing
+    const job = this.withThumbnailSlot(async () => {
+      const sourcePath = this.library.open(asset.id)
+      if (!sourcePath) return undefined
+      const temporary = path.join(this.thumbnailDirectory, `.${asset.id}.${crypto.randomBytes(4).toString('hex')}.tmp`)
+      try {
+        await sharp(sourcePath, { limitInputPixels: MAX_IMAGE_PIXELS, animated: false })
+          .rotate()
+          .resize({ width: 480, height: 320, fit: 'inside', withoutEnlargement: true })
+          .png({ compressionLevel: 9 })
+          .toFile(temporary)
+        if (!this.library.get(asset.id)) {
+          try { fs.unlinkSync(temporary) } catch { /* deleted while thumbnail was rendering */ }
+          return undefined
+        }
+        try { fs.renameSync(temporary, target) } catch (error) {
+          try { fs.unlinkSync(temporary) } catch { /* another request may have created it */ }
+          if (!fs.existsSync(target)) throw error
+        }
+        return target
+      } catch {
+        try { await fs.promises.unlink(temporary) } catch { /* best effort */ }
+        return undefined
+      }
+    }).finally(() => this.thumbnailJobs.delete(asset.id))
+    this.thumbnailJobs.set(asset.id, job)
+    return job
+  }
+
+  async waitForStorageReady(): Promise<void> {
+    await this.storageMigration
+  }
+
+  private async migrateStorageRoot(rootDirectory: string): Promise<void> {
+    const run = this.storageMigration.then(async () => {
+      await this.library.changeStorageRootAsync(rootDirectory, { removeOldAfterSuccess: false })
+    })
+    this.storageMigration = run.catch(() => undefined)
+    await run
   }
 
   getSettings(): AppSettings {
@@ -102,10 +181,14 @@ export class TaStore {
         hasApiKey: Boolean(this.settings.encryptedApiKeys[provider.id]),
       })),
       hotkeys: { ...this.settings.hotkeys },
+      externalCapture: {
+        enabled: this.settings.externalCapture.enabled,
+        apps: Object.fromEntries(Object.entries(this.settings.externalCapture.apps).map(([appId, rule]) => [appId, { ...rule }])) as AppSettings['externalCapture']['apps'],
+      },
     }
   }
 
-  updateSettings(nextValue: SettingsUpdate): AppSettings {
+  async updateSettings(nextValue: SettingsUpdate): Promise<AppSettings> {
     const next = parseSettingsUpdate(nextValue)
     const encryptedApiKeys = { ...this.settings.encryptedApiKeys }
     for (const [providerId, apiKey] of Object.entries(next.apiKeys ?? {})) {
@@ -117,10 +200,15 @@ export class TaStore {
     }
     for (const providerId of next.clearApiKeys ?? []) delete encryptedApiKeys[providerId]
 
+    const requestedRoot = next.storageRoot.trim() || this.library.getRootDirectory()
+    if (path.resolve(requestedRoot) !== path.resolve(this.library.getRootDirectory())) {
+      await this.migrateStorageRoot(requestedRoot)
+    }
     const { apiKeys: _apiKeys, clearApiKeys: _clearApiKeys, ...publicSettings } = next
     this.settings = {
       ...this.settings,
       ...publicSettings,
+      storageRoot: this.library.getRootDirectory(),
       providers: publicSettings.providers.map(({ hasApiKey: _hasApiKey, ...provider }) => provider),
       encryptedApiKeys,
     }
@@ -146,38 +234,80 @@ export class TaStore {
     return { profile, apiKey }
   }
 
-  addHistory(png: Buffer, width: number, height: number, action: CaptureAction | 'edited' | 'beautified'): HistoryItem {
-    const id = `${Date.now()}-${crypto.randomBytes(4).toString('hex')}`
-    const fileName = `${id}.png`
-    fs.writeFileSync(path.join(this.historyDirectory, fileName), png)
-    const item: HistoryItem = {
-      id,
-      createdAt: new Date().toISOString(),
+  addHistory(
+    png: Buffer,
+    width: number,
+    height: number,
+    action: CaptureAction | 'edited' | 'beautified',
+    source: AssetSource = action === 'edited' ? 'edited' : action === 'beautified' ? 'beautified' : 'ta-capture',
+    title?: string,
+    dedupe: 'none' | 'short-term' | 'global' = 'none',
+    createdAt?: Date | string,
+    sourceApp?: LibrarySourceApp,
+  ): { item: HistoryItem; created: boolean } {
+    const result = this.library.addPng({
+      png,
       width,
       height,
-      action,
-      fileName,
-    }
-    this.history.items.unshift(item)
-    const removed = this.history.items.splice(40)
-    for (const oldItem of removed) {
-      const filePath = this.safeHistoryFilePath(oldItem.id, oldItem.fileName)
-      if (filePath) try { fs.unlinkSync(filePath) } catch { /* already gone */ }
-    }
-    this.writeHistory()
-    return item
+      action: action as LibraryAssetAction,
+      source: source as LibraryAssetSource,
+      title,
+      dedupe,
+      createdAt,
+      sourceApp,
+    })
+    return { item: this.toHistoryItem(result.asset), created: result.created }
   }
 
   listHistory(): HistoryItem[] {
-    return this.history.items.map((item) => ({ ...item, thumbnailUrl: `ta-media://image/${item.id}` }))
+    return this.library.list({ limit: 50 }).items.map((item) => this.toHistoryItem(item))
+  }
+
+  listAssets(query: LibraryListQuery = {}): LibraryListResult {
+    const result = this.library.list(query as Parameters<AssetLibrary['list']>[0])
+    return {
+      items: result.items.map((item) => this.toHistoryItem(item)),
+      nextCursor: result.nextCursor,
+      totalCount: this.library.count(query as Parameters<AssetLibrary['count']>[0]),
+    }
+  }
+
+  getLibraryStats(): LibraryStats {
+    const stats = this.library.stats()
+    return {
+      ...stats,
+      freeBytes: stats.freeBytes ?? 0,
+      legacyMigration: this.library.lastLegacyMigration
+        ? { ...this.library.lastLegacyMigration, errors: [...this.library.lastLegacyMigration.errors] }
+        : undefined,
+    }
+  }
+
+  retryLegacyMigration() {
+    return this.library.retryLegacyMigration()
+  }
+
+  renameAsset(id: string, title: string): HistoryItem | undefined {
+    const item = this.library.rename(id, title)
+    return item ? this.toHistoryItem(item) : undefined
+  }
+
+  exportAssets(ids: string[], destinationDirectory: string) {
+    return this.library.batchExportAsync(ids, destinationDirectory)
   }
 
   getHistoryFile(id: string): string | undefined {
-    const item = this.history.items.find((candidate) => candidate.id === id)
-    if (!item) return undefined
-    const filePath = this.safeHistoryFilePath(item.id, item.fileName)
-    if (!filePath) return undefined
-    return fs.existsSync(filePath) ? filePath : undefined
+    return this.library.open(id)
+  }
+
+  getHistoryItem(id: string): HistoryItem | undefined {
+    const asset = this.library.get(id)
+    return asset ? this.toHistoryItem(asset) : undefined
+  }
+
+  getThumbnailFile(id: string): Promise<string | undefined> {
+    const asset = this.library.get(id)
+    return asset ? this.ensureThumbnail(asset) : Promise.resolve(undefined)
   }
 
   getHistoryImage(id: string) {
@@ -186,12 +316,12 @@ export class TaStore {
   }
 
   deleteHistory(id: string): boolean {
-    const index = this.history.items.findIndex((item) => item.id === id)
-    if (index < 0) return false
-    const [item] = this.history.items.splice(index, 1)
-    const filePath = this.safeHistoryFilePath(item.id, item.fileName)
-    if (filePath) try { fs.unlinkSync(filePath) } catch { /* already gone */ }
-    this.writeHistory()
-    return true
+    const deleted = this.library.delete(id)
+    if (deleted) try { fs.unlinkSync(this.thumbnailPath(id)) } catch { /* thumbnail may not exist */ }
+    return deleted
+  }
+
+  close() {
+    this.library.close()
   }
 }

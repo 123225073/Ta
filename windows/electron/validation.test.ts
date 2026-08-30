@@ -4,6 +4,7 @@ import {
   MAX_PNG_BYTES,
   parseCaptureAction,
   parseExternalUrl,
+  parseLibraryListQuery,
   parseHistoryId,
   parsePinCommand,
   parsePinPoint,
@@ -41,6 +42,7 @@ describe('untrusted input validation', () => {
 
   it('rejects traversal-like history IDs', () => {
     expect(parseHistoryId('1756300000000-12ab34cd')).toBe('1756300000000-12ab34cd')
+    expect(parseHistoryId('1756300000000-12ab34cd56ef7890')).toBe('1756300000000-12ab34cd56ef7890')
     expect(() => parseHistoryId('../../settings')).toThrow(/编号无效/)
   })
 
@@ -54,13 +56,24 @@ describe('untrusted input validation', () => {
 
   it('validates settings at the IPC trust boundary', () => {
     expect(parseSettingsUpdate(defaultSettings).longCaptureMaxFrames).toBe(12)
+    expect(parseSettingsUpdate({ ...defaultSettings, theme: 'light' }).theme).toBe('light')
     expect(parseSettingsUpdate({ ...defaultSettings, captureWindowPolicy: 'keep-ta' } as typeof defaultSettings).captureWindowPolicy).toBe('keep-ta')
     expect(parseSettingsUpdate({ ...defaultSettings, smartSelectionEnabled: false }).smartSelectionEnabled).toBe(false)
+    expect(parseSettingsUpdate({ ...defaultSettings, externalCapture: { ...defaultSettings.externalCapture, enabled: true, apps: { ...defaultSettings.externalCapture.apps, feishu: { enabled: true, mode: 'strict' } } } }).externalCapture.apps.feishu.enabled).toBe(true)
+    expect(parseSettingsUpdate({ ...defaultSettings, externalCapture: { ...defaultSettings.externalCapture, apps: { ...defaultSettings.externalCapture.apps, feishu: { enabled: true, mode: 'all-images' } } } } as unknown as typeof defaultSettings).externalCapture.apps.feishu.mode).toBe('strict')
     expect(defaultSettings.providers.find((provider) => provider.id === 'fengsha-cpa')).toMatchObject({ baseUrl: 'https://cpa.fengsha.online/v1', model: 'gpt-5.5' })
     expect(() => parseSettingsUpdate({ ...defaultSettings, longCaptureMaxFrames: 100_000 })).toThrow(/3 到 30/)
     expect(() => parseSettingsUpdate({ ...defaultSettings, captureWindowPolicy: 'hide-everything' } as unknown as typeof defaultSettings)).toThrow(/截图窗口策略/)
     expect(() => parseSettingsUpdate({ ...defaultSettings, smartSelectionEnabled: 'yes' } as unknown as typeof defaultSettings)).toThrow(/布尔值/)
+    expect(() => parseSettingsUpdate({ ...defaultSettings, theme: 'sepia' } as unknown as typeof defaultSettings)).toThrow(/界面主题/)
+    expect(() => parseSettingsUpdate({ ...defaultSettings, externalCapture: { ...defaultSettings.externalCapture, apps: { ...defaultSettings.externalCapture.apps, feishu: { enabled: true, mode: 'guess' } } } } as unknown as typeof defaultSettings)).toThrow(/模式无效/)
     expect(() => parseSettingsUpdate({ ...defaultSettings, providers: [{ ...defaultSettings.providers[0], baseUrl: 'file:///tmp/key' }] })).toThrow(/HTTP/)
     expect(() => parseSettingsUpdate({ ...defaultSettings, providers: [{ ...defaultSettings.providers[0], baseUrl: 'https://user:pass@example.com' }] })).toThrow(/HTTP/)
+  })
+
+  it('validates library filters including real calendar dates', () => {
+    expect(parseLibraryListQuery({ limit: 60, search: ' 项目 ', date: '2026-08-28' })).toEqual({ limit: 60, search: '项目', date: '2026-08-28' })
+    expect(() => parseLibraryListQuery({ date: '2026-02-31' })).toThrow(/日期格式无效/)
+    expect(() => parseLibraryListQuery({ source: 'remote-cloud' })).toThrow(/来源无效/)
   })
 })

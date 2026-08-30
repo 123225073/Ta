@@ -7,7 +7,7 @@
 ### 框住它，拓下来。
 
 [![Windows](https://img.shields.io/badge/Windows-10%2F11-1676D2.svg)](./windows/README.md)
-[![Version](https://img.shields.io/badge/Windows-v1.1.11-E62D1B.svg)](./docs/release-notes-v1.1.11.md)
+[![Version](https://img.shields.io/badge/Windows-v1.3.2-FF4D37.svg)](./docs/release-notes-v1.3.2.md)
 [![Electron](https://img.shields.io/badge/Electron-44-47848F.svg)](./windows/package.json)
 [![License](https://img.shields.io/badge/License-MIT-D6402F.svg)](./LICENSE)
 
@@ -23,7 +23,7 @@
 
 Windows 版不是把 macOS 程序套壳运行，而是针对 Windows 重新实现了屏幕捕获、DPI、多显示器、全局快捷键、托盘、剪贴板、安全存储、安装和窗口生命周期。
 
-## Windows v1.1.11 能做什么
+## Windows v1.3.2 能做什么
 
 - **通用截图**：鼠标框选后松开即保留选区，可移动、八方向缩放，双击或按 `Enter` 完成。
 - **智能框选**：鼠标移动到窗口时自动识别可见边框；单击锁定，也可以继续手动框选。
@@ -32,11 +32,15 @@ Windows 版不是把 macOS 程序套壳运行，而是针对 Windows 重新实�
 - **本地取字**：内置简体中文和英文离线 OCR；普通截图和 OCR 不需要联网。
 - **AI 识图与翻译**：支持 OpenAI-compatible、DeepSeek/兼容服务、Anthropic Claude 和 Google Gemini；实际调用的模型由“设置 → 模型服务”中当前选中的服务、Base URL 和模型名共同决定。
 - **同图结果缓存**：同一张截图在取字、AI 识图和翻译之间切换时保留已完成结果；只有点击“重新识别”才再次请求。
-- **标注**：矩形、椭圆、箭头、画笔、高亮、文字、编号、马赛克、模糊、橡皮、撤销和重做。大图进入标注时先完整适配视口，也可手动缩放。
+- **标注**：矩形、椭圆、箭头、画笔、高亮、文字、编号、马赛克、模糊、橡皮、撤销和重做。大图进入标注时先完整适配视口，也可手动缩放；按 `Esc` 可直接返回结果页。
 - **钉图**：置顶显示，支持拖动、旋转、翻转、透明度、鼠标穿透恢复和关闭，并避免在任务栏产生一排重复图标。
-- **滚动长截图**：自动滚动、帧去重与拼接；复杂动画页面可能仍需人工检查接缝。
+- **滚动长截图**：只拼接选区内滚动内容，自动识别固定顶栏/底栏并仅保留一次；独立浮层实时显示已识别帧数、自动下滑与拼接状态，采集像素前会临时隐藏自身。
 - **可录制快捷键**：直接按下 `Alt + F1` 等组合键即可写入设置，保存时检查冲突并注册。
 - **可控隐藏**：截图前可选择自动隐藏 Ta、保留 Ta 或每次询问。自动隐藏会从 Windows 合成画面中完全移除 Ta，其他软件不会被隐藏。
+- **外部截图自动收集**：可分别启用飞书、微信和 QQ；默认严格模式组合可信签名进程、同一剪贴板序列，以及微信专属标记、QQ 专用截图进程或飞书默认全局截图快捷键与真实置顶截图浮层上下文，未知来源和普通复制均失败关闭。
+- **本地素材库**：截图、明确粘贴和文件导入按日期长期保存，支持名称搜索、日期筛选、重命名、多选、选择当天、全选筛选结果和批量导出。
+- **自定义保存位置**：可在设置中更换图片根目录；切换前逐张复制并校验，迁移期间的新写入会等待完成，不清理旧目录。
+- **瓷白 / 夜幕双主题**：标题栏可一键切换“瓷白典藏”和“夜幕玻璃”，选择立即生效并自动保存；首页、素材库、设置、结果和标注页均完整适配。
 
 ## 默认快捷键
 
@@ -76,7 +80,7 @@ Windows 版不是把 macOS 程序套壳运行，而是针对 Windows 重新实�
 Windows 10 22H2 或 Windows 11 x64 用户可运行本项目构建出的：
 
 ```text
-windows/release/Ta-Windows-1.1.11-x64-Setup.exe
+windows/release/Ta-Windows-1.3.2-x64-Setup.exe
 ```
 
 安装器创建桌面和开始菜单快捷方式。覆盖安装不会主动删除用户设置、加密后的 API Key 或截图历史；卸载配置为保留用户数据。
@@ -99,6 +103,7 @@ npm run dist
 npm test
 npm run typecheck
 npm run test:preview-fidelity
+npm run smoke:clipboard
 npm run smoke:e2e
 ```
 
@@ -133,14 +138,16 @@ Ta/
 - 每块显示器都有独立覆盖层；当前不支持一个选区横跨两块物理显示器。
 - 滚动长截图面对视频、持续动画、半透明浮层或大幅重排页面时，拼接结果可能需要人工复核。
 - AI 识图效果、速度和费用由用户选择的服务与模型决定。
+- 微信私有剪贴板格式和第三方程序结构可能随版本升级变化；飞书自定义快捷键或从界面按钮启动截图时，严格规则若无法确认就不会导入。此时仍可在拓的素材库中明确粘贴或导入图片，无需用户制作校准样本。
 - Windows 安装包尚未进行商业代码签名，SmartScreen 可能显示未知发布者提示。
 
 ## 文档与验收证据
 
 - [Windows 版使用与构建](./windows/README.md)
 - [Windows 架构说明](./docs/windows-port-architecture.md)
-- [Windows v1.1.11 更新说明](./docs/release-notes-v1.1.11.md)
-- [Windows v1.1.11 隐藏残影与标注适配对抗审查](./docs/windows-hide-and-editor-adversarial-review-v1.1.11.md)
+- [Windows v1.3.2 更新说明](./docs/release-notes-v1.3.2.md)
+- [Windows v1.3.1 更新说明](./docs/release-notes-v1.3.1.md)
+- [Windows v1.2.0 外部截图与素材库对抗审查](./docs/windows-external-capture-library-adversarial-review-v1.2.0.md)
 - [Windows 完整验收报告](./docs/windows-acceptance.md)
 - [微信式截图技术调研](./docs/wechat-screenshot-research-v1.1.9.md)
 

@@ -1,6 +1,7 @@
 import { KeyboardEvent as ReactKeyboardEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { Editor } from './Editor'
-import { AppSettings, CaptureAction, CaptureResult, HistoryItem } from './types'
+import { AppSettings, CaptureAction, CaptureResult, HistoryItem, LibraryListQuery, LibraryStats } from './types'
+import { LibraryPage, type AssetExportSelection, type AssetFilter, type AssetView } from './LibraryPage'
 import {
   beginToolRun,
   completeToolRun,
@@ -11,7 +12,7 @@ import {
 } from './result-tool-cache'
 import { captureHotkey, duplicateAccelerators, formatAccelerator } from './hotkey-recorder'
 
-type Page = 'home' | 'settings' | 'result'
+type Page = 'home' | 'library' | 'settings' | 'result'
 type Notice = { message: string; tone?: 'success' | 'error' }
 
 const actionCopy: Array<{ action: CaptureAction; title: string; description: string; key: string; glyph: string }> = [
@@ -36,6 +37,14 @@ const actionNames: Record<string, string> = {
   capture: '通用截图', ocr: '极速取字', copy: '快速截图', pin: '截图钉图', long: '滚动长图', translate: '截图翻译', edited: '标注图片', beautified: '美化图片',
 }
 
+function cachedTheme(): AppSettings['theme'] {
+  try { return window.localStorage.getItem('ta-theme') === 'light' ? 'light' : 'dark' } catch { return 'dark' }
+}
+
+function cacheTheme(theme: AppSettings['theme']) {
+  try { window.localStorage.setItem('ta-theme', theme) } catch { /* Settings remains the source of truth. */ }
+}
+
 function formatDate(value: string) {
   const date = new Date(value)
   const today = new Date()
@@ -43,18 +52,42 @@ function formatDate(value: string) {
   return date.toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
 
-function TitleBar({ page, version, onNavigate }: { page: Page; version: string; onNavigate(page: Page): void }) {
+function TitleBar({ page, version, theme, themeBusy, onNavigate, onThemeToggle }: {
+  page: Page
+  version: string
+  theme: AppSettings['theme']
+  themeBusy: boolean
+  onNavigate(page: Page): void
+  onThemeToggle(): void
+}) {
   return (
     <header className="titlebar">
       <div className="brand" title="按住这里拖动窗口"><img src="./icon.png" alt="拓" /><span><b>拓 Ta</b><small>Windows · v{version}</small></span></div>
       <nav>
         <button className={page === 'home' ? 'active' : ''} onClick={() => onNavigate('home')}>工作台</button>
+        <button className={page === 'library' ? 'active' : ''} onClick={() => onNavigate('library')}>素材库</button>
         <button className={page === 'settings' ? 'active' : ''} onClick={() => onNavigate('settings')}>设置</button>
       </nav>
-      <div className="window-controls">
-        <button aria-label="最小化" onClick={() => window.ta.windowMinimize()}>—</button>
-        <button aria-label="最大化" onClick={() => window.ta.windowToggleMaximize()}>□</button>
-        <button aria-label="关闭" className="close" onClick={() => window.ta.windowClose()}>×</button>
+      <div className="titlebar-actions">
+        <button
+          type="button"
+          className="theme-toggle"
+          data-testid="theme-toggle"
+          aria-label={`切换为${theme === 'dark' ? '瓷白' : '夜幕'}主题`}
+          aria-pressed={theme === 'light'}
+          aria-busy={themeBusy}
+          disabled={themeBusy}
+          title={`当前：${theme === 'light' ? '瓷白典藏' : '夜幕玻璃'}主题`}
+          onClick={onThemeToggle}
+        >
+          <span className="theme-toggle-track" aria-hidden="true"><i>{theme === 'light' ? '☀' : '☾'}</i></span>
+          <b>{theme === 'light' ? '瓷白' : '夜幕'}</b>
+        </button>
+        <div className="window-controls">
+          <button aria-label="最小化" onClick={() => window.ta.windowMinimize()}>—</button>
+          <button aria-label="最大化" onClick={() => window.ta.windowToggleMaximize()}>□</button>
+          <button aria-label="关闭" className="close" onClick={() => window.ta.windowClose()}>×</button>
+        </div>
       </div>
     </header>
   )
@@ -112,12 +145,13 @@ function HotkeyRecorder({ action, title, glyph, value, conflictReason, onChange 
   </label>
 }
 
-function Home({ history, hotkeys, onCapture, onOpenHistory, onDeleteHistory, onSettings }: {
+function Home({ history, hotkeys, onCapture, onOpenHistory, onDeleteHistory, onLibrary, onSettings }: {
   history: HistoryItem[]
   hotkeys?: AppSettings['hotkeys']
   onCapture(action: CaptureAction): void
   onOpenHistory(id: string): void
   onDeleteHistory(id: string): void
+  onLibrary(): void
   onSettings(): void
 }) {
   return (
@@ -149,7 +183,7 @@ function Home({ history, hotkeys, onCapture, onOpenHistory, onDeleteHistory, onS
       </section>
 
       <section className="section history-section">
-        <div className="section-heading"><div><span>02</span><h2>最近拓片</h2></div><p>最多保留 40 张，只存储在本机</p></div>
+        <div className="section-heading"><div><span>02</span><h2>最近拓片</h2></div><p>按日期长期保存在本机 · <button className="inline-link" onClick={onLibrary}>查看全部</button></p></div>
         {history.length ? (
           <div className="history-grid">
             {history.slice(0, 8).map((item) => (
@@ -160,7 +194,7 @@ function Home({ history, hotkeys, onCapture, onOpenHistory, onDeleteHistory, onS
             ))}
           </div>
         ) : (
-          <div className="empty-history"><span>拓</span><div><b>还没有拓片</b><p>按 Ctrl + Shift + 2 截下第一张。截图历史只保存在这台电脑上。</p></div></div>
+          <div className="empty-history"><span>拓</span><div><b>还没有拓片</b><p>按 Ctrl + Shift + 2 截下第一张，也可以在素材库明确粘贴或导入图片。</p></div></div>
         )}
       </section>
 
@@ -174,6 +208,7 @@ function SettingsPage({ settings, hotkeyStatus, onSave }: { settings?: AppSettin
   const [apiKeys, setApiKeys] = useState<Record<string, string>>({})
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
+  const [saveError, setSaveError] = useState('')
   useEffect(() => { if (settings) setDraft(structuredClone(settings)) }, [settings])
   useEffect(() => () => window.ta.setHotkeyRecording(false), [])
   const duplicateHotkeys = useMemo(() => duplicateAccelerators(draft?.hotkeys ?? {}), [draft?.hotkeys])
@@ -185,15 +220,17 @@ function SettingsPage({ settings, hotkeyStatus, onSave }: { settings?: AppSettin
 
   const save = async () => {
     if (duplicateHotkeys.size) return
-    setSaving(true); setSaved(false)
-    try { await onSave({ ...draft, apiKeys }); setApiKeys({}); setSaved(true); setTimeout(() => setSaved(false), 2200) } finally { setSaving(false) }
+    setSaving(true); setSaved(false); setSaveError('')
+    try { await onSave({ ...draft, apiKeys }); setApiKeys({}); setSaved(true); setTimeout(() => setSaved(false), 2200) }
+    catch (error) { setSaveError(error instanceof Error ? error.message : String(error)) }
+    finally { setSaving(false) }
   }
 
   return (
     <div className="page settings-page">
       <div className="page-intro"><div className="eyebrow"><span /> 个性化与隐私</div><h1>设置</h1><p>让快捷键、模型与长截图方式贴合你的习惯。</p></div>
       <div className="settings-layout">
-        <aside className="settings-index"><a href="#models">01 模型服务</a><a href="#hotkeys">02 快捷键</a><a href="#capture">03 截图行为</a><a href="#general">04 常规</a></aside>
+        <aside className="settings-index"><a href="#models">01 模型服务</a><a href="#hotkeys">02 快捷键</a><a href="#capture">03 截图行为</a><a href="#library-settings">04 自动收集与存储</a><a href="#general">05 常规</a></aside>
         <div className="settings-content">
           <section id="models" className="settings-panel">
             <header><span>01</span><div><h2>模型服务</h2><p>AI Key 使用 Windows 安全加密后保存在本机。</p></div></header>
@@ -244,13 +281,37 @@ function SettingsPage({ settings, hotkeyStatus, onSave }: { settings?: AppSettin
             </div>
           </section>
 
+          <section id="library-settings" className="settings-panel">
+            <header><span>04</span><div><h2>自动收集与存储</h2><p>让指定软件的截图直接进入拓；普通复制默认不会被收集。</p></div></header>
+            <div className="storage-setting">
+              <label><span>素材保存路径</span><input readOnly value={draft.storageRoot} title={draft.storageRoot} /></label>
+              <div><button type="button" className="quiet-button" onClick={() => void window.ta.chooseStorageRoot().then((result) => { if (!result.canceled && result.rootDirectory) setDraft({ ...draft, storageRoot: result.rootDirectory }) })}>选择位置</button><button type="button" className="quiet-button" onClick={() => void window.ta.openStorageRoot()}>打开当前目录</button></div>
+              <small>保存后会把现有素材安全复制到新位置并核验；旧文件保留，避免误删。图片按 年 / 月 / 日 自动归档，数量不设上限。</small>
+            </div>
+            <div className="external-capture-settings">
+              <label className="external-master"><span><b>外部截图自动进入拓</b><small>仅在拓正在运行时生效；关闭后不会读取外部图片。</small></span><input type="checkbox" checked={draft.externalCapture.enabled} onChange={(event) => setDraft({ ...draft, externalCapture: { ...draft.externalCapture, enabled: event.target.checked } })} /></label>
+              {([
+                ['feishu', '飞书', '严格模式识别默认截图快捷键与可信飞书进程'],
+                ['weixin', '微信', '只接收通过微信截图产生的图片'],
+                ['qq', 'QQ', '严格模式识别 QQ 专用截图进程，并排除 QQ 浏览器'],
+              ] as const).map(([appId, appName, description]) => {
+                const rule = draft.externalCapture.apps[appId]
+                return <div className={`external-app-rule${draft.externalCapture.enabled ? '' : ' disabled'}`} key={appId}>
+                  <label><span><b>{appName}</b><small>{description}</small></span><input type="checkbox" disabled={!draft.externalCapture.enabled} checked={rule.enabled} onChange={(event) => setDraft({ ...draft, externalCapture: { ...draft.externalCapture, apps: { ...draft.externalCapture.apps, [appId]: { ...rule, enabled: event.target.checked } } } })} /></label>
+                  <span className="external-strict-badge">仅收集截图</span>
+                </div>
+              })}
+              <p className="capture-privacy-note">“只收集截图”会核验进程路径、软件身份、数字签名与截图专用格式，识别不确定时不保存；仍可在素材库点击粘贴区后 Ctrl + V 手动加入。</p>
+            </div>
+          </section>
+
           <section id="general" className="settings-panel">
-            <header><span>04</span><div><h2>常规</h2><p>关闭主窗口后仍驻留系统托盘，快捷键继续可用。</p></div></header>
+            <header><span>05</span><div><h2>常规</h2><p>关闭主窗口后仍驻留系统托盘，快捷键和已开启的外部截图收集继续可用。</p></div></header>
             <div className="toggle-list"><label><span><b>开机自动启动</b><small>登录 Windows 后自动运行拓 Ta</small></span><input type="checkbox" checked={draft.autoLaunch} onChange={(event) => setDraft({ ...draft, autoLaunch: event.target.checked })} /></label><label><span><b>启动时最小化</b><small>不显示主窗口，只驻留系统托盘</small></span><input type="checkbox" checked={draft.launchMinimized} onChange={(event) => setDraft({ ...draft, launchMinimized: event.target.checked })} /></label></div>
           </section>
         </div>
       </div>
-      <div className="settings-save"><span>{duplicateHotkeys.size ? '存在重复快捷键，请先重新录制' : saved ? '设置已保存并生效' : '修改仅在点击保存后生效'}</span><button className="button-primary" disabled={saving || duplicateHotkeys.size > 0} onClick={save}>{saving ? '保存中…' : '保存设置'}</button></div>
+      <div className="settings-save"><span className={saveError ? 'save-error' : ''}>{duplicateHotkeys.size ? '存在重复快捷键，请先重新录制' : saveError || (saved ? '设置已保存并生效' : '修改仅在点击保存后生效')}</span><button className="button-primary" disabled={saving || duplicateHotkeys.size > 0} onClick={save}>{saving ? '保存中…' : '保存设置'}</button></div>
     </div>
   )
 }
@@ -366,38 +427,74 @@ function ResultPage({ result, settings, onBack, notify }: { result?: CaptureResu
 }
 
 export function App({ initialRoute }: { initialRoute?: string }) {
-  const [page, setPage] = useState<Page>((['home', 'settings', 'result'].includes(initialRoute ?? '') ? initialRoute : 'home') as Page)
+  const [page, setPage] = useState<Page>((['home', 'library', 'settings', 'result'].includes(initialRoute ?? '') ? initialRoute : 'home') as Page)
   const [history, setHistory] = useState<HistoryItem[]>([])
+  const [libraryAssets, setLibraryAssets] = useState<HistoryItem[]>([])
+  const [libraryFilter, setLibraryFilter] = useState<AssetFilter>({ search: '', date: '' })
+  const libraryFilterRef = useRef<AssetFilter>({ search: '', date: '' })
+  const libraryRequestSequence = useRef(0)
+  const [libraryCursor, setLibraryCursor] = useState<string>()
+  const [libraryTotal, setLibraryTotal] = useState(0)
+  const [libraryLoading, setLibraryLoading] = useState(false)
+  const [libraryLoadingMore, setLibraryLoadingMore] = useState(false)
+  const [libraryError, setLibraryError] = useState<string>()
+  const [libraryStats, setLibraryStats] = useState<LibraryStats>()
   const [settings, setSettings] = useState<AppSettings>()
+  const [themeFallback, setThemeFallback] = useState<AppSettings['theme']>(cachedTheme)
+  const [themeBusy, setThemeBusy] = useState(false)
   const [result, setResult] = useState<CaptureResult>()
-  const [version, setVersion] = useState('1.1.11')
+  const [version, setVersion] = useState('1.3.2')
   const [notice, setNotice] = useState<Notice>()
   const [hotkeyStatus, setHotkeyStatus] = useState<Record<string, boolean>>({})
 
   const refreshHistory = () => window.ta.getHistory().then(setHistory)
+  const loadLibrary = async (reset = true, filter = libraryFilterRef.current) => {
+    const requestId = reset ? ++libraryRequestSequence.current : libraryRequestSequence.current
+    if (reset) setLibraryLoading(true); else setLibraryLoadingMore(true)
+    setLibraryError(undefined)
+    try {
+      const query: LibraryListQuery = { limit: 60, search: filter.search, date: filter.date || undefined }
+      if (!reset && libraryCursor) query.cursor = libraryCursor
+      const [response, stats] = await Promise.all([window.ta.listAssets(query), window.ta.getLibraryStats()])
+      if (requestId !== libraryRequestSequence.current) return
+      setLibraryAssets((current) => reset ? response.items : [...current, ...response.items])
+      setLibraryCursor(response.nextCursor)
+      setLibraryTotal(response.totalCount)
+      setLibraryStats(stats)
+    } catch (error) {
+      setLibraryError(error instanceof Error ? error.message : String(error))
+    } finally {
+      if (requestId === libraryRequestSequence.current) { setLibraryLoading(false); setLibraryLoadingMore(false) }
+    }
+  }
   useEffect(() => {
-    void refreshHistory(); void window.ta.getSettings().then(setSettings); void window.ta.getAppInfo().then((info) => setVersion(info.version))
+    void refreshHistory(); void loadLibrary(); void window.ta.getSettings().then((value) => { setSettings(value); setThemeFallback(value.theme); cacheTheme(value.theme) }); void window.ta.getAppInfo().then((info) => setVersion(info.version))
     if (page === 'result') void window.ta.getResult().then(setResult)
     const unsubscribeHotkeys = window.ta.onHotkeyStatus(setHotkeyStatus)
     const unsubscribeHistory = window.ta.onHistoryChanged(setHistory)
+    const unsubscribeLibrary = window.ta.onLibraryChanged(() => { void refreshHistory(); void loadLibrary(true) })
     const unsubscribeNavigation = window.ta.onNavigate((payload) => {
+      setNotice(undefined)
       setPage(payload.route)
       window.history.replaceState(null, '', `#/${payload.route}`)
       if (payload.route === 'home') void refreshHistory()
+      if (payload.route === 'library') void loadLibrary(true)
       if (payload.route === 'result') {
         if (payload.result) setResult(payload.result)
         else void window.ta.getResult().then(setResult)
       }
     })
-    return () => { unsubscribeHotkeys(); unsubscribeHistory(); unsubscribeNavigation() }
+    return () => { unsubscribeHotkeys(); unsubscribeHistory(); unsubscribeLibrary(); unsubscribeNavigation() }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
   useEffect(() => { if (!notice) return; const timer = window.setTimeout(() => setNotice(undefined), 2600); return () => window.clearTimeout(timer) }, [notice])
 
   const navigate = (next: Page) => {
+    setNotice(undefined)
     setPage(next)
     window.history.replaceState(null, '', `#/${next}`)
     if (next === 'home') void refreshHistory()
+    if (next === 'library') void loadLibrary(true)
   }
   const capture = async (action: CaptureAction) => {
     try { await window.ta.startCapture(action) } catch (error) { setNotice({ message: error instanceof Error ? error.message : String(error), tone: 'error' }) }
@@ -406,12 +503,85 @@ export function App({ initialRoute }: { initialRoute?: string }) {
     const response = await window.ta.saveSettings(value)
     setSettings(response.settings); setHotkeyStatus(response.hotkeyStatus); setNotice({ message: '设置已保存', tone: 'success' })
   }
+  const toggleTheme = async () => {
+    if (!settings || themeBusy) return
+    const previous = settings
+    const next = { ...settings, theme: settings.theme === 'light' ? 'dark' as const : 'light' as const }
+    setThemeBusy(true)
+    setSettings(next)
+    setThemeFallback(next.theme)
+    cacheTheme(next.theme)
+    try {
+      const response = await window.ta.saveSettings(next)
+      setSettings(response.settings)
+      setThemeFallback(response.settings.theme)
+      cacheTheme(response.settings.theme)
+      setHotkeyStatus(response.hotkeyStatus)
+    } catch (error) {
+      setSettings(previous)
+      setThemeFallback(previous.theme)
+      cacheTheme(previous.theme)
+      setNotice({ message: error instanceof Error ? error.message : String(error), tone: 'error' })
+    } finally {
+      setThemeBusy(false)
+    }
+  }
+  const openAsset = (id: string) => void window.ta.openHistory(id).then((value) => { setResult(value); navigate('result') }).catch((error) => setNotice({ message: error instanceof Error ? error.message : String(error), tone: 'error' }))
+  const refreshLibrary = () => loadLibrary(true, libraryFilter)
+  const exportLibrarySelection = async (selection: AssetExportSelection) => {
+    try {
+      const response = await window.ta.exportAssets(selection)
+      if (!response.canceled) setNotice({ message: `已导出 ${response.exportedCount} 张图片${response.missingIds.length ? `，${response.missingIds.length} 张已不存在` : ''}`, tone: 'success' })
+    } catch (error) {
+      setNotice({ message: error instanceof Error ? error.message : String(error), tone: 'error' })
+    }
+  }
+  const assetViews: AssetView[] = libraryAssets.map((item) => ({
+    id: item.id,
+    name: item.title,
+    createdAt: item.createdAt,
+    dateKey: item.dateKey,
+    width: item.width,
+    height: item.height,
+    thumbnailUrl: item.thumbnailUrl,
+    source: item.source,
+    sourceApp: item.sourceApp,
+  }))
   const content = useMemo(() => {
     if (page === 'settings') return <SettingsPage settings={settings} hotkeyStatus={hotkeyStatus} onSave={saveSettings} />
     if (page === 'result') return <ResultPage result={result} settings={settings} onBack={() => navigate('home')} notify={setNotice} />
-    return <Home history={history} hotkeys={settings?.hotkeys} onCapture={capture} onOpenHistory={(id) => void window.ta.openHistory(id).then((value) => { setResult(value); navigate('result') })} onDeleteHistory={(id) => void window.ta.deleteHistory(id).then(refreshHistory)} onSettings={() => navigate('settings')} />
+    if (page === 'library') return <LibraryPage
+      assets={assetViews}
+      loading={libraryLoading}
+      error={libraryError}
+      migrationWarning={libraryStats?.legacyMigration?.failed ? libraryStats.legacyMigration : undefined}
+      totalCount={libraryTotal}
+      hasMore={Boolean(libraryCursor)}
+      loadingMore={libraryLoadingMore}
+      onLoadMore={() => loadLibrary(false, libraryFilter)}
+      onFilterChange={(filter) => { libraryFilterRef.current = filter; setLibraryFilter(filter); void loadLibrary(true, filter) }}
+      onPasteImages={async () => { const response = await window.ta.pasteClipboardImage(); setNotice({ message: response.created ? '图片已粘贴到素材库' : '相同图片刚刚已经收集', tone: 'success' }); await refreshLibrary() }}
+      onImport={async () => { try { const response = await window.ta.importImages(); if (!response.canceled) { setNotice({ message: `已导入 ${response.imported.length} 张图片${response.failed.length ? `，${response.failed.length} 张失败` : ''}`, tone: response.failed.length ? 'error' : 'success' }); await refreshLibrary() } } catch (error) { setNotice({ message: error instanceof Error ? error.message : String(error), tone: 'error' }) } }}
+      onOpenStorageLocation={async () => { try { await window.ta.openStorageRoot() } catch (error) { setNotice({ message: error instanceof Error ? error.message : String(error), tone: 'error' }) } }}
+      onOpen={openAsset}
+      onRename={async (id, name) => { try { await window.ta.renameAsset(id, name); await refreshLibrary() } catch (error) { setNotice({ message: error instanceof Error ? error.message : String(error), tone: 'error' }); throw error } }}
+      onDelete={async (id) => { if (!window.confirm('确定从素材库删除这张图片吗？原图会移入 Windows 回收站。')) return; try { await window.ta.deleteAssets([id]); await refreshLibrary() } catch (error) { setNotice({ message: error instanceof Error ? error.message : String(error), tone: 'error' }) } }}
+      onExport={exportLibrarySelection}
+      onRetry={refreshLibrary}
+      onRetryMigration={async () => {
+        try {
+          const migration = await window.ta.retryLegacyMigration()
+          setNotice({ message: migration?.failed ? `仍有 ${migration.failed} 条旧截图无法迁移` : '旧版截图迁移已完成', tone: migration?.failed ? 'error' : 'success' })
+          await refreshLibrary()
+        } catch (error) {
+          setNotice({ message: error instanceof Error ? error.message : String(error), tone: 'error' })
+        }
+      }}
+    />
+    return <Home history={history} hotkeys={settings?.hotkeys} onCapture={capture} onOpenHistory={openAsset} onDeleteHistory={(id) => { if (window.confirm('确定删除这张图片吗？原图会移入 Windows 回收站。')) void window.ta.deleteHistory(id).then(refreshHistory).catch((error) => setNotice({ message: error instanceof Error ? error.message : String(error), tone: 'error' })) }} onLibrary={() => navigate('library')} onSettings={() => navigate('settings')} />
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, history, settings, result, hotkeyStatus])
+  }, [page, history, settings, result, hotkeyStatus, libraryAssets, libraryLoading, libraryError, libraryStats, libraryTotal, libraryCursor, libraryLoadingMore, libraryFilter])
 
-  return <main className="app-shell"><TitleBar page={page} version={version} onNavigate={navigate} />{content}{notice && <div className={`toast ${notice.tone ?? ''}`}><span>{notice.tone === 'error' ? '!' : '✓'}</span>{notice.message}</div>}</main>
+  const theme = settings?.theme ?? themeFallback
+  return <main className="app-shell" data-page={page} data-theme={theme}><TitleBar page={page} version={version} theme={theme} themeBusy={themeBusy} onNavigate={navigate} onThemeToggle={toggleTheme} />{content}{notice && <div className={`toast ${notice.tone ?? ''}`} role={notice.tone === 'error' ? 'alert' : 'status'} aria-live={notice.tone === 'error' ? 'assertive' : 'polite'}><span>{notice.tone === 'error' ? '!' : '✓'}</span>{notice.message}</div>}</main>
 }

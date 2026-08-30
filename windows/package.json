@@ -1,6 +1,6 @@
 {
   "name": "ta-windows",
-  "version": "1.1.11",
+  "version": "1.3.2",
   "private": true,
   "description": "拓（Ta）AI 原生截图工具 Windows 客户端",
   "author": "Ta contributors",
@@ -17,6 +17,7 @@
     "dist": "npm run test && npm run test:preview-fidelity && npm run typecheck && npm run build && electron-builder --win nsis",
     "smoke": "node scripts/smoke.cjs",
     "smoke:e2e": "node scripts/e2e-smoke.cjs",
+    "smoke:clipboard": "node scripts/clipboard-monitor-smoke.cjs",
     "configure:cpa": "node scripts/cpa-maintenance.cjs import",
     "verify:cpa": "node scripts/cpa-maintenance.cjs verify"
   },

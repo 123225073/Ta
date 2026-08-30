@@ -6,6 +6,11 @@ export interface StitchMatch {
   shift: number
 }
 
+export interface FixedBands {
+  top: number
+  bottom: number
+}
+
 export async function frameMeanDifference(firstPng: Buffer, secondPng: Buffer): Promise<number> {
   const first = await sharp(firstPng).resize({ width: 240, withoutEnlargement: true }).greyscale().raw().toBuffer({ resolveWithObject: true })
   const second = await sharp(secondPng).resize(first.info.width, first.info.height).greyscale().raw().toBuffer()
@@ -56,13 +61,60 @@ export async function findVerticalOverlap(previousPng: Buffer, currentPng: Buffe
   return best
 }
 
-export async function stitchVerticalFrames(frames: Buffer[]): Promise<{ png: Buffer; matches: StitchMatch[] }> {
+async function detectFixedBands(frames: Buffer[], width: number, height: number): Promise<FixedBands> {
+  if (frames.length < 2 || height < 80) return { top: 0, bottom: 0 }
+  const probeIndexes = [...new Set([0, 1, Math.floor((frames.length - 1) / 2), frames.length - 1])]
+  const probes = await Promise.all(probeIndexes.map((index) => sharp(frames[index])
+    .resize({ width: Math.min(360, width), withoutEnlargement: true })
+    .greyscale()
+    .raw()
+    .toBuffer({ resolveWithObject: true })))
+  const sampleWidth = probes[0].info.width
+  const sampleHeight = probes[0].info.height
+  if (!sampleWidth || !sampleHeight || probes.some((probe) => probe.info.width !== sampleWidth || probe.info.height !== sampleHeight)) return { top: 0, bottom: 0 }
+  const xStart = Math.floor(sampleWidth * .04)
+  const xEnd = Math.ceil(sampleWidth * .96)
+  const xStep = Math.max(1, Math.floor(sampleWidth / 180))
+  const rowIsStatic = (y: number) => {
+    let similar = 0
+    let comparisons = 0
+    const first = probes[0].data
+    for (let probeIndex = 1; probeIndex < probes.length; probeIndex += 1) {
+      const candidate = probes[probeIndex].data
+      for (let x = xStart; x < xEnd; x += xStep) {
+        if (Math.abs(first[y * sampleWidth + x] - candidate[y * sampleWidth + x]) <= 7) similar += 1
+        comparisons += 1
+      }
+    }
+    return comparisons > 0 && similar / comparisons >= .94
+  }
+  const maximumBand = Math.floor(sampleHeight * .35)
+  const minimumBand = Math.max(4, Math.floor(sampleHeight * .018))
+  const scanFromEdge = (fromTop: boolean) => {
+    let boundary = 0
+    let dynamicStreak = 0
+    for (let offset = 0; offset < maximumBand; offset += 1) {
+      const y = fromTop ? offset : sampleHeight - 1 - offset
+      if (rowIsStatic(y)) {
+        boundary = offset + 1
+        dynamicStreak = 0
+      } else {
+        dynamicStreak += 1
+        if (dynamicStreak >= 3) break
+      }
+    }
+    if (boundary < minimumBand) return 0
+    return Math.min(height - 1, Math.round(boundary * height / sampleHeight))
+  }
+  const top = scanFromEdge(true)
+  const bottom = scanFromEdge(false)
+  if (top + bottom > height * .55 || height - top - bottom < 32) return { top: 0, bottom: 0 }
+  return { top, bottom }
+}
+
+async function stitchScrollableFrames(frames: Buffer[], width: number, height: number) {
   if (!frames.length) throw new Error('没有可拼接的截图帧。')
   if (frames.length === 1) return { png: frames[0], matches: [] }
-  const firstMeta = await sharp(frames[0]).metadata()
-  const width = firstMeta.width ?? 0
-  const height = firstMeta.height ?? 0
-  if (!width || !height) throw new Error('无法读取长截图尺寸。')
 
   const matches: StitchMatch[] = []
   const additions: Array<{ input: Buffer; top: number; left: number }> = [{ input: frames[0], top: 0, left: 0 }]
@@ -82,4 +134,44 @@ export async function stitchVerticalFrames(frames: Buffer[]): Promise<{ png: Buf
     create: { width, height: totalHeight, channels: 4, background: { r: 255, g: 255, b: 255, alpha: 1 } },
   }).composite(additions).png().toBuffer()
   return { png, matches }
+}
+
+export async function stitchVerticalFrames(frames: Buffer[]): Promise<{ png: Buffer; matches: StitchMatch[]; fixedBands: FixedBands }> {
+  if (!frames.length) throw new Error('没有可拼接的截图帧。')
+  const firstMeta = await sharp(frames[0]).metadata()
+  const width = firstMeta.width ?? 0
+  const height = firstMeta.height ?? 0
+  if (!width || !height) throw new Error('无法读取长截图尺寸。')
+  if (frames.length === 1) return { png: frames[0], matches: [], fixedBands: { top: 0, bottom: 0 } }
+
+  const fixedBands = await detectFixedBands(frames, width, height)
+  if (!fixedBands.top && !fixedBands.bottom) {
+    const stitched = await stitchScrollableFrames(frames, width, height)
+    return { ...stitched, fixedBands }
+  }
+
+  const coreHeight = height - fixedBands.top - fixedBands.bottom
+  const cores = await Promise.all(frames.map((frame) => sharp(frame)
+    .extract({ left: 0, top: fixedBands.top, width, height: coreHeight })
+    .png()
+    .toBuffer()))
+  const core = await stitchScrollableFrames(cores, width, coreHeight)
+  const coreMeta = await sharp(core.png).metadata()
+  const stitchedCoreHeight = coreMeta.height ?? coreHeight
+  const additions: Array<{ input: Buffer; top: number; left: number }> = []
+  let outputTop = 0
+  if (fixedBands.top) {
+    additions.push({ input: await sharp(frames[0]).extract({ left: 0, top: 0, width, height: fixedBands.top }).png().toBuffer(), top: outputTop, left: 0 })
+    outputTop += fixedBands.top
+  }
+  additions.push({ input: core.png, top: outputTop, left: 0 })
+  outputTop += stitchedCoreHeight
+  if (fixedBands.bottom) {
+    additions.push({ input: await sharp(frames.at(-1)!).extract({ left: 0, top: height - fixedBands.bottom, width, height: fixedBands.bottom }).png().toBuffer(), top: outputTop, left: 0 })
+    outputTop += fixedBands.bottom
+  }
+  const png = await sharp({
+    create: { width, height: outputTop, channels: 4, background: { r: 255, g: 255, b: 255, alpha: 1 } },
+  }).composite(additions).png().toBuffer()
+  return { png, matches: core.matches, fixedBands }
 }

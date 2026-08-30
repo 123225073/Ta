@@ -1,5 +1,6 @@
 import { PointerEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { computeEditorFitScale } from './editor-fit'
+import { isEditorCancelShortcut } from './editor-shortcuts'
 
 type Tool = 'pen' | 'highlight' | 'rect' | 'ellipse' | 'arrow' | 'text' | 'number' | 'mosaic' | 'blur' | 'eraser'
 type Point = { x: number; y: number }
@@ -134,6 +135,16 @@ export function Editor({ imageDataUrl, onCancel, onExport }: EditorProps) {
   const [zoom, setZoom] = useState(1)
   const [fitReady, setFitReady] = useState(false)
 
+  useEffect(() => {
+    const cancelWithKeyboard = (event: KeyboardEvent) => {
+      if (!isEditorCancelShortcut(event.key)) return
+      event.preventDefault()
+      onCancel()
+    }
+    window.addEventListener('keydown', cancelWithKeyboard)
+    return () => window.removeEventListener('keydown', cancelWithKeyboard)
+  }, [onCancel])
+
   const fitToViewport = useCallback(() => {
     const stage = stageRef.current
     const source = sourceRef.current
@@ -248,14 +259,14 @@ export function Editor({ imageDataUrl, onCancel, onExport }: EditorProps) {
   const activeTool = useMemo(() => tools.find((item) => item.id === tool), [tool])
 
   return (
-    <section className="editor-shell">
+    <section className="editor-shell" aria-label="图片标注编辑器">
       <header className="editor-header">
         <div className="editor-title"><span className="seal-mini">拓</span><div><strong>原位标注</strong><small>{activeTool?.label} · {marks.length} 个对象</small></div></div>
-        <div className="editor-actions"><button onClick={onCancel}>取消</button><button className="button-primary" onClick={exportImage}>完成标注</button></div>
+        <div className="editor-actions"><button className="editor-cancel-button" aria-keyshortcuts="Escape" onClick={onCancel}>取消 <kbd>Esc</kbd></button><button className="button-primary" onClick={exportImage}>完成标注</button></div>
       </header>
       <div className="editor-toolbar">
         <div className="tool-group">
-          {tools.map((item) => <button key={item.id} className={tool === item.id ? 'active' : ''} onClick={() => setTool(item.id)} title={item.label}><span>{item.glyph}</span>{item.label}</button>)}
+          {tools.map((item) => <button key={item.id} className={tool === item.id ? 'active' : ''} aria-pressed={tool === item.id} onClick={() => setTool(item.id)} title={item.label}><span>{item.glyph}</span>{item.label}</button>)}
         </div>
         <span className="toolbar-divider" />
         <label className="color-swatch" title="颜色"><input type="color" value={color} onChange={(event) => setColor(event.target.value)} /><i style={{ background: color }} /></label>

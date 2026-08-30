@@ -31,6 +31,7 @@ import sharp from 'sharp'
 import { runAI, visionPrompt } from './ai'
 import {
   AppSettings,
+  AssetSource,
   CaptureAction,
   CaptureResult,
   LongCaptureProgress,
@@ -43,12 +44,23 @@ import { analyzeImageContent, analyzePixelContent, type ImageContentStats } from
 import { frameMeanDifference, stitchVerticalFrames } from './stitch'
 import { mapWindowCandidatesToDisplay, type PhysicalWindowRect } from './smart-selection'
 import { TaStore } from './store'
+import { classifyClipboardSource, type ClipboardSourceEvent, type ExternalScreenshotApp } from './clipboard-source'
+import {
+  ExternalCaptureStaging,
+  ExternalCaptureStagingFullError,
+  type StagedExternalCapture,
+} from './external-capture-staging'
 import {
   MAX_IMAGE_PIXELS,
+  MAX_PNG_BYTES,
   parseAiMode,
+  parseAssetTitle,
   parseCaptureAction,
   parseExternalUrl,
   parseHistoryId,
+  parseHistoryIds,
+  parseLibraryListQuery,
+  parseLibraryExportSelection,
   parsePinCommand,
   parsePinPoint,
   parsePngDataUrl,
@@ -74,6 +86,8 @@ let captureStarting = false
 let captureGeneration = 0
 let hotkeysSuspended = false
 let lastResult: CaptureResult | undefined
+let longCaptureHudWindow: BrowserWindow | undefined
+let currentLongCaptureProgress: LongCaptureProgress | undefined
 let lastCaptureTiming: Record<string, number | boolean | string> | undefined
 let lastCaptureHydration: Promise<void> | undefined
 const e2eAiRunCounts = { vision: 0, translate: 0 }
@@ -115,6 +129,31 @@ const windowsCaptureRequests = new Map<string, {
   timeout: NodeJS.Timeout
   onCaptured?: (response: WindowsCaptureResponse) => void
 }>()
+let clipboardMonitor: ChildProcessWithoutNullStreams | undefined
+let clipboardMonitorOutput = ''
+let lastClipboardSequence = -1
+let clipboardMonitorDesired = false
+let clipboardMonitorStartedAt = 0
+let clipboardMonitorRestartDelayMs = 1_500
+const activeClipboardSequences = new Set<number>()
+const MAX_ACTIVE_CLIPBOARD_IMPORTS = 2
+let externalCaptureStaging: ExternalCaptureStaging
+const stagedClipboardQueue: StagedExternalCapture[] = []
+const stagedClipboardPaths = new Set<string>()
+let stagedClipboardDrain: Promise<void> | undefined
+let stagedClipboardRetry: NodeJS.Timeout | undefined
+let lastClipboardCapacityWarningAt = 0
+const clipboardInspectionRequests = new Map<string, {
+  resolve: (event: ClipboardSourceEvent) => void
+  reject: (error: Error) => void
+  timeout: NodeJS.Timeout
+}>()
+const approvedStorageRoots = new Set<string>()
+
+function storageRootKey(value: string) {
+  const resolved = path.resolve(value)
+  return process.platform === 'win32' ? resolved.toLocaleLowerCase('en-US') : resolved
+}
 
 interface WindowsCaptureScreen {
   path: string
@@ -259,6 +298,291 @@ function stopWindowsCaptureHost() {
   if (path.dirname(target) === tempRoot && path.basename(target).startsWith('ta-windows-capture-')) {
     try { fs.rmSync(target, { recursive: true, force: true }) } catch { /* helper may still be releasing a PNG */ }
   }
+}
+
+function clipboardMonitorScriptPath() {
+  return app.isPackaged
+    ? path.join(process.resourcesPath, 'capture', 'ta-clipboard-monitor.ps1')
+    : path.resolve(__dirname, '..', 'resources', 'capture', 'ta-clipboard-monitor.ps1')
+}
+
+function notifyLibraryChanged() {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  sendWhenReady(mainWindow, 'history:changed', store.listHistory())
+  sendWhenReady(mainWindow, 'library:changed', undefined)
+}
+
+async function deleteHistoryToRecycleBin(id: string) {
+  await store.waitForStorageReady()
+  const filePath = store.getHistoryFile(id)
+  if (!filePath) return store.deleteHistory(id)
+  await shell.trashItem(filePath)
+  if (!store.deleteHistory(id)) throw new Error('原图已移入回收站，但素材索引清理失败。请重启拓后重试。')
+  return true
+}
+
+async function normalizedPngFromBuffer(input: Buffer) {
+  if (!input.length || input.length > MAX_PNG_BYTES) throw new Error('图片文件为空或超过 80 MB。')
+  const { data: png, info } = await sharp(input, { limitInputPixels: MAX_IMAGE_PIXELS, animated: false })
+    .rotate()
+    .png()
+    .toBuffer({ resolveWithObject: true })
+  const width = info.width
+  const height = info.height
+  if (width < 1 || height < 1 || width * height > MAX_IMAGE_PIXELS) throw new Error('图片尺寸无效或过大。')
+  if (png.length > MAX_PNG_BYTES) throw new Error('标准化后的图片超过 80 MB。')
+  return { png, width, height }
+}
+
+async function readClipboardPng() {
+  const items = await clipboard.read()
+  for (const item of items) {
+    const type = item.types.find((candidate) => candidate.toLowerCase() === 'image/png')
+      ?? item.types.find((candidate) => candidate.toLowerCase().startsWith('image/'))
+    if (!type) continue
+    const value = await item.getType(type)
+    if (!(value instanceof Blob)) continue
+    return normalizedPngFromBuffer(Buffer.from(await value.arrayBuffer()))
+  }
+  throw new Error('剪贴板中没有可读取的图片。')
+}
+
+const externalAppNames: Record<ExternalScreenshotApp, string> = { feishu: '飞书', weixin: '微信', qq: 'QQ' }
+
+function warnClipboardCapacity(message: string) {
+  console.warn('[clipboard-auto-import]', message)
+  if (Date.now() - lastClipboardCapacityWarningAt < 60_000) return
+  lastClipboardCapacityWarningAt = Date.now()
+  new Notification({ title: '拓 Ta 外部截图暂未收集', body: message }).show()
+}
+
+function scheduleStagedClipboardDrain() {
+  if (stagedClipboardDrain || isQuitting || !externalCaptureStaging) return
+  stagedClipboardDrain = (async () => {
+    while (stagedClipboardQueue.length && !isQuitting) {
+      const entry = stagedClipboardQueue[0]
+      let png: Buffer
+      try {
+        await store.waitForStorageReady()
+        png = await externalCaptureStaging.read(entry)
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+          stagedClipboardQueue.shift()
+          stagedClipboardPaths.delete(entry.filePath)
+          continue
+        }
+        const message = error instanceof Error ? error.message : String(error)
+        console.warn('[clipboard-staging-read]', message)
+        warnClipboardCapacity('外部截图已安全暂存，素材库恢复可写后会自动重试。')
+        if (!stagedClipboardRetry) {
+          stagedClipboardRetry = setTimeout(() => {
+            stagedClipboardRetry = undefined
+            scheduleStagedClipboardDrain()
+          }, 5_000)
+          stagedClipboardRetry.unref()
+        }
+        break
+      }
+
+      let width = 0
+      let height = 0
+      try {
+        if (!png.length || png.length > MAX_PNG_BYTES) throw new Error('暂存图片为空或超过 80 MB。')
+        const metadata = await sharp(png, { limitInputPixels: MAX_IMAGE_PIXELS, animated: false }).metadata()
+        width = metadata.width ?? 0
+        height = metadata.height ?? 0
+        if (width < 1 || height < 1 || width * height > MAX_IMAGE_PIXELS) throw new Error('暂存图片尺寸无效或过大。')
+      } catch (error) {
+        const quarantined = await externalCaptureStaging.quarantine(entry).catch(() => undefined)
+        stagedClipboardQueue.shift()
+        stagedClipboardPaths.delete(entry.filePath)
+        console.warn('[clipboard-staging-invalid]', error instanceof Error ? error.message : error, quarantined ?? '')
+        warnClipboardCapacity('一张暂存图片已损坏并被隔离，后续截图将继续导入。')
+        continue
+      }
+
+      try {
+        const result = store.addHistory(
+          png,
+          width,
+          height,
+          'capture',
+          'external-capture',
+          `${externalAppNames[entry.sourceApp]}截图`,
+          'short-term',
+          entry.createdAt,
+          entry.sourceApp,
+        )
+        await externalCaptureStaging.remove(entry)
+        stagedClipboardQueue.shift()
+        stagedClipboardPaths.delete(entry.filePath)
+        if (!result.created) continue
+        notifyLibraryChanged()
+        new Notification({ title: '拓 Ta', body: `已自动收集一张${externalAppNames[entry.sourceApp]}截图` }).show()
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        console.warn('[clipboard-staging-drain]', message)
+        warnClipboardCapacity('外部截图已安全暂存，素材库恢复可写后会自动重试。')
+        if (!stagedClipboardRetry) {
+          stagedClipboardRetry = setTimeout(() => {
+            stagedClipboardRetry = undefined
+            scheduleStagedClipboardDrain()
+          }, 5_000)
+          stagedClipboardRetry.unref()
+        }
+        break
+      }
+    }
+  })().finally(() => {
+    stagedClipboardDrain = undefined
+    if (stagedClipboardQueue.length && !isQuitting && !stagedClipboardRetry) scheduleStagedClipboardDrain()
+  })
+}
+
+function enqueueStagedClipboard(entry: StagedExternalCapture) {
+  if (stagedClipboardPaths.has(entry.filePath)) return
+  stagedClipboardPaths.add(entry.filePath)
+  stagedClipboardQueue.push(entry)
+  stagedClipboardQueue.sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+  scheduleStagedClipboardDrain()
+}
+
+function inspectClipboardMetadata(): Promise<ClipboardSourceEvent> {
+  const child = clipboardMonitor
+  if (!child || child.killed) return Promise.reject(new Error('剪贴板来源监听器尚未就绪。'))
+  const requestId = crypto.randomUUID()
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      clipboardInspectionRequests.delete(requestId)
+      reject(new Error('剪贴板来源二次核验超时。'))
+    }, 1_500)
+    clipboardInspectionRequests.set(requestId, { resolve, reject, timeout })
+    child.stdin.write(`inspect ${requestId}\n`, (error) => {
+      if (!error) return
+      const pending = clipboardInspectionRequests.get(requestId)
+      if (!pending) return
+      clipboardInspectionRequests.delete(requestId)
+      clearTimeout(pending.timeout)
+      pending.reject(error)
+    })
+  })
+}
+
+function matchingAuthorizedClipboardEvent(expected: ClipboardSourceEvent, actual: ClipboardSourceEvent, expectedApp: ExternalScreenshotApp) {
+  if (
+    actual.sequence !== expected.sequence
+    || actual.ownerPid !== expected.ownerPid
+    || actual.executablePath !== expected.executablePath
+    || actual.signerThumbprint !== expected.signerThumbprint
+  ) return false
+  const decision = classifyClipboardSource(actual, store.getSettings().externalCapture)
+  return decision.action === 'auto-import' && decision.sourceApp === expectedApp
+}
+
+async function handleClipboardSourceEvent(event: ClipboardSourceEvent) {
+  const decision = classifyClipboardSource(event, store.getSettings().externalCapture)
+  if (decision.action !== 'auto-import' || decision.sourceApp === 'ta' || decision.sourceApp === 'unknown') return
+  if (activeClipboardSequences.has(event.sequence)) return
+  if (activeClipboardSequences.size >= MAX_ACTIVE_CLIPBOARD_IMPORTS) {
+    warnClipboardCapacity('外部截图产生过快，拓正在处理前面的图片；本次未收集，请稍后再截。')
+    return
+  }
+  activeClipboardSequences.add(event.sequence)
+  try {
+    const beforeRead = await inspectClipboardMetadata()
+    if (!matchingAuthorizedClipboardEvent(event, beforeRead, decision.sourceApp)) return
+    const image = await readClipboardPng()
+    const afterRead = await inspectClipboardMetadata()
+    if (!matchingAuthorizedClipboardEvent(event, afterRead, decision.sourceApp)) return
+    const staged = await externalCaptureStaging.stage(image.png, decision.sourceApp, new Date())
+    enqueueStagedClipboard(staged)
+  } catch (error) {
+    if (error instanceof ExternalCaptureStagingFullError) {
+      warnClipboardCapacity('外部截图暂存空间已满；请等待保存位置迁移完成后再截图。')
+    } else {
+      console.warn('[clipboard-auto-import]', error instanceof Error ? error.message : error)
+    }
+  } finally {
+    activeClipboardSequences.delete(event.sequence)
+  }
+}
+
+function handleClipboardMonitorLine(line: string) {
+  let event: ClipboardSourceEvent & { type?: string; requestId?: string | null }
+  try { event = JSON.parse(line) as ClipboardSourceEvent & { type?: string; requestId?: string | null } } catch { return }
+  if (event.type !== 'clipboard-update' || !Number.isSafeInteger(event.sequence)) return
+  if (event.requestId) {
+    const pending = clipboardInspectionRequests.get(event.requestId)
+    if (!pending) return
+    clipboardInspectionRequests.delete(event.requestId)
+    clearTimeout(pending.timeout)
+    pending.resolve(event)
+    return
+  }
+  if (event.sequence === lastClipboardSequence) return
+  lastClipboardSequence = event.sequence
+  void handleClipboardSourceEvent(event)
+}
+
+function startClipboardMonitor() {
+  if (!clipboardMonitorDesired || process.platform !== 'win32' || process.env.TA_DISABLE_CLIPBOARD_MONITOR === '1' || clipboardMonitor) return
+  const scriptPath = clipboardMonitorScriptPath()
+  if (!fs.existsSync(scriptPath)) return
+  const systemPowerShell = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+  const child = spawn(fs.existsSync(systemPowerShell) ? systemPowerShell : 'powershell.exe', [
+    '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', scriptPath,
+  ], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] })
+  clipboardMonitor = child
+  clipboardMonitorOutput = ''
+  clipboardMonitorStartedAt = Date.now()
+  child.stdout.on('data', (chunk: Buffer) => {
+    clipboardMonitorOutput += chunk.toString('utf8')
+    if (clipboardMonitorOutput.length > 1024 * 1024) {
+      clipboardMonitorOutput = ''
+      console.warn('[clipboard-monitor] discarded oversized output buffer')
+      return
+    }
+    let newline = clipboardMonitorOutput.indexOf('\n')
+    while (newline >= 0) {
+      const line = clipboardMonitorOutput.slice(0, newline).trim()
+      clipboardMonitorOutput = clipboardMonitorOutput.slice(newline + 1)
+      if (line) handleClipboardMonitorLine(line)
+      newline = clipboardMonitorOutput.indexOf('\n')
+    }
+  })
+  child.stderr.on('data', (chunk: Buffer) => console.warn('[clipboard-monitor]', chunk.toString('utf8').trim()))
+  child.on('error', (error) => console.warn('[clipboard-monitor]', error.message))
+  child.on('exit', () => {
+    if (clipboardMonitor === child) clipboardMonitor = undefined
+    for (const [requestId, pending] of clipboardInspectionRequests) {
+      clipboardInspectionRequests.delete(requestId)
+      clearTimeout(pending.timeout)
+      pending.reject(new Error('剪贴板来源监听器已退出。'))
+    }
+    if (Date.now() - clipboardMonitorStartedAt > 60_000) clipboardMonitorRestartDelayMs = 1_500
+    else clipboardMonitorRestartDelayMs = Math.min(60_000, clipboardMonitorRestartDelayMs * 2)
+    if (!isQuitting && clipboardMonitorDesired) setTimeout(startClipboardMonitor, clipboardMonitorRestartDelayMs).unref()
+  })
+}
+
+function stopClipboardMonitor() {
+  const child = clipboardMonitor
+  clipboardMonitor = undefined
+  if (!child || child.killed) return
+  for (const [requestId, pending] of clipboardInspectionRequests) {
+    clipboardInspectionRequests.delete(requestId)
+    clearTimeout(pending.timeout)
+    pending.reject(new Error('剪贴板来源监听器正在关闭。'))
+  }
+  try { child.stdin.end('exit\n') } catch { child.kill() }
+  setTimeout(() => { if (!child.killed) child.kill() }, 800).unref()
+}
+
+function syncClipboardMonitor(settings: AppSettings) {
+  clipboardMonitorDesired = settings.externalCapture.enabled
+    && Object.values(settings.externalCapture.apps).some((rule) => rule.enabled)
+  if (clipboardMonitorDesired) startClipboardMonitor()
+  else stopClipboardMonitor()
 }
 
 function requestWindowsCapture(excludedWindowHandles: string[] = [], onCaptured?: (response: WindowsCaptureResponse) => void): Promise<WindowsCaptureResponse> {
@@ -857,9 +1181,10 @@ async function writeImageToClipboard(image: NativeImage) {
   await clipboard.write([new ClipboardItem({ 'image/png': new Blob([png], { type: 'image/png' }) })])
 }
 
-async function commitResult(image: NativeImage, action: CaptureResult['action'], show = true) {
+async function commitResult(image: NativeImage, action: CaptureResult['action'], show = true, source?: AssetSource, title?: string) {
   const size = image.getSize()
-  const item = store.addHistory(image.toPNG(), size.width, size.height, action)
+  await store.waitForStorageReady()
+  const { item } = store.addHistory(image.toPNG(), size.width, size.height, action, source, title)
   lastResult = {
     id: item.id,
     imageDataUrl: image.toDataURL(),
@@ -868,7 +1193,7 @@ async function commitResult(image: NativeImage, action: CaptureResult['action'],
     action,
     createdAt: item.createdAt,
   }
-  if (mainWindow && !mainWindow.isDestroyed()) sendWhenReady(mainWindow, 'history:changed', store.listHistory())
+  notifyLibraryChanged()
   if (show) await showRoute('result')
   return lastResult
 }
@@ -940,8 +1265,74 @@ async function inspectNativeWindow(window: BrowserWindow) {
 }
 
 function publishLongProgress(progress: LongCaptureProgress) {
+  currentLongCaptureProgress = progress
   tray?.setToolTip(`拓 Ta · ${progress.message}`)
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('long-capture:progress', progress)
+  if (longCaptureHudWindow && !longCaptureHudWindow.isDestroyed()) {
+    sendWhenReady(longCaptureHudWindow, 'long-capture:progress', progress)
+    longCaptureHudWindow.setOpacity(1)
+    longCaptureHudWindow.showInactive()
+  }
+}
+
+function destroyLongCaptureHud() {
+  const hud = longCaptureHudWindow
+  longCaptureHudWindow = undefined
+  currentLongCaptureProgress = undefined
+  if (hud && !hud.isDestroyed()) hud.destroy()
+}
+
+function hideLongCaptureHudForFrame() {
+  const hud = longCaptureHudWindow
+  if (!hud || hud.isDestroyed()) return
+  hud.setOpacity(0)
+  hud.hide()
+}
+
+function showLongCaptureHud() {
+  const hud = longCaptureHudWindow
+  if (!hud || hud.isDestroyed()) return
+  hud.setOpacity(1)
+  hud.showInactive()
+}
+
+async function createLongCaptureHud(display: Display, rect: SelectionRect) {
+  destroyLongCaptureHud()
+  const width = Math.min(326, Math.max(260, display.workArea.width - 24))
+  const height = 116
+  const selectedRight = display.bounds.x + rect.x + rect.width
+  const selectedTop = display.bounds.y + rect.y
+  const x = Math.max(display.workArea.x + 12, Math.min(selectedRight - width - 14, display.workArea.x + display.workArea.width - width - 12))
+  const y = Math.max(display.workArea.y + 12, Math.min(selectedTop + 14, display.workArea.y + display.workArea.height - height - 12))
+  const hud = createTaWindow({
+    x: Math.round(x),
+    y: Math.round(y),
+    width,
+    height,
+    frame: false,
+    transparent: true,
+    backgroundColor: '#00000000',
+    resizable: false,
+    movable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    focusable: false,
+    hasShadow: false,
+  })
+  longCaptureHudWindow = hud
+  hud.setAlwaysOnTop(true, 'screen-saver')
+  hud.setSkipTaskbar(true)
+  hud.setIgnoreMouseEvents(true)
+  hud.on('closed', () => {
+    if (longCaptureHudWindow === hud) longCaptureHudWindow = undefined
+  })
+  await loadRoute(hud, 'long-progress')
+  if (longCaptureHudWindow !== hud || hud.isDestroyed()) return
+  hud.setOpacity(1)
+  hud.showInactive()
 }
 
 async function runLongCapture(display: Display, rect: SelectionRect) {
@@ -950,20 +1341,34 @@ async function runLongCapture(display: Display, rect: SelectionRect) {
   const centerX = display.bounds.x + rect.x + rect.width / 2
   const centerY = display.bounds.y + rect.y + rect.height / 2
   try {
+    await createLongCaptureHud(display, rect)
+    publishLongProgress({ phase: 'capturing', frame: 0, maxFrames: settings.longCaptureMaxFrames, message: '正在锁定选中区域' })
+    await new Promise((resolve) => setTimeout(resolve, 220))
     for (let frame = 0; frame < settings.longCaptureMaxFrames; frame += 1) {
-      publishLongProgress({ phase: 'capturing', frame: frame + 1, maxFrames: settings.longCaptureMaxFrames, message: `长截图采集中 ${frame + 1}/${settings.longCaptureMaxFrames}` })
+      hideLongCaptureHudForFrame()
+      // Windows GDI capture runs outside Chromium. Give DWM one composition
+      // turn after hiding the HUD so status pixels can never enter the frame.
+      await new Promise((resolve) => setTimeout(resolve, 34))
       const image = await captureRegion(display, rect)
       const png = image.toPNG()
-      if (frames.length && await frameMeanDifference(frames.at(-1)!, png) < 1.1) break
+      if (frames.length && await frameMeanDifference(frames.at(-1)!, png) < 1.1) {
+        publishLongProgress({ phase: 'capturing', frame: frames.length, maxFrames: settings.longCaptureMaxFrames, message: '已到页面末尾，准备生成长截图' })
+        await new Promise((resolve) => setTimeout(resolve, 180))
+        break
+      }
       frames.push(png)
+      publishLongProgress({ phase: 'capturing', frame: frames.length, maxFrames: settings.longCaptureMaxFrames, message: `已识别第 ${frames.length} 帧，页面正在下滑` })
       if (frame < settings.longCaptureMaxFrames - 1) {
         await sendMouseWheel(centerX, centerY)
         await new Promise((resolve) => setTimeout(resolve, settings.longCaptureDelayMs))
       }
     }
-    publishLongProgress({ phase: 'stitching', frame: frames.length, maxFrames: settings.longCaptureMaxFrames, message: '正在匹配并拼接长截图' })
-    const { png } = await stitchVerticalFrames(frames)
-    publishLongProgress({ phase: 'complete', frame: frames.length, maxFrames: settings.longCaptureMaxFrames, message: `长截图完成，共 ${frames.length} 帧` })
+    publishLongProgress({ phase: 'stitching', frame: frames.length, maxFrames: settings.longCaptureMaxFrames, message: '正在分析固定栏并拼接长截图' })
+    const { png, fixedBands } = await stitchVerticalFrames(frames)
+    const fixedBandMessage = fixedBands.top || fixedBands.bottom ? '，固定栏已仅保留一次' : ''
+    publishLongProgress({ phase: 'complete', frame: frames.length, maxFrames: settings.longCaptureMaxFrames, message: `长截图完成，共 ${frames.length} 帧${fixedBandMessage}` })
+    await new Promise((resolve) => setTimeout(resolve, 420))
+    destroyLongCaptureHud()
     const image = nativeImage.createFromBuffer(png)
     await commitResult(image, 'long')
     try { await writeImageToClipboard(image) } catch (error) { void reportOperationError('自动复制失败', error) }
@@ -973,6 +1378,7 @@ async function runLongCapture(display: Display, rect: SelectionRect) {
     await dialog.showMessageBox({ type: 'error', title: '长截图失败', message })
     await showRoute('home')
   } finally {
+    destroyLongCaptureHud()
     tray?.setToolTip('拓 Ta · AI 原生截图工具')
   }
 }
@@ -1126,6 +1532,12 @@ function installIpcHandlers(rebuildTray: () => void) {
     const session = overlaySessions.get(event.sender.id)
     return session?.payload
   })
+  ipcMain.handle('long-capture:get-progress', (event): LongCaptureProgress | undefined => {
+    if (!longCaptureHudWindow || longCaptureHudWindow.isDestroyed() || event.sender !== longCaptureHudWindow.webContents) {
+      throw new Error('拒绝来自非长截图状态窗口的 IPC 请求。')
+    }
+    return currentLongCaptureProgress
+  })
   ipcMain.on('overlay:ready', (event) => {
     if (overlaySessions.has(event.sender.id)) overlayReadyIds.add(event.sender.id)
   })
@@ -1211,10 +1623,18 @@ function installIpcHandlers(rebuildTray: () => void) {
   })
   ipcMain.handle('settings:save', async (event, settingsValue: unknown) => {
     requireMainSender(event)
-    const updated = store.updateSettings(parseSettingsUpdate(settingsValue))
+    const parsed = parseSettingsUpdate(settingsValue)
+    const currentRoot = store.getLibraryStats().rootDirectory
+    if (storageRootKey(parsed.storageRoot || currentRoot) !== storageRootKey(currentRoot)
+      && !approvedStorageRoots.has(storageRootKey(parsed.storageRoot))) {
+      throw new Error('保存位置必须通过“选择位置”按钮确认。')
+    }
+    const updated = await store.updateSettings(parsed)
     app.setLoginItemSettings({ openAtLogin: updated.autoLaunch, args: updated.launchMinimized ? ['--minimized'] : [] })
     const hotkeyStatus = await registerHotkeysAfterRelease(updated)
+    syncClipboardMonitor(updated)
     rebuildTray()
+    notifyLibraryChanged()
     return { settings: updated, hotkeyStatus }
   })
   ipcMain.on('hotkeys:recording', (event, active: unknown) => {
@@ -1227,22 +1647,142 @@ function installIpcHandlers(rebuildTray: () => void) {
     requireMainSender(event)
     return store.listHistory()
   })
+  ipcMain.handle('library:list', (event, queryValue?: unknown) => {
+    requireMainSender(event)
+    return store.listAssets(parseLibraryListQuery(queryValue))
+  })
+  ipcMain.handle('library:stats', (event) => {
+    requireMainSender(event)
+    return store.getLibraryStats()
+  })
+  ipcMain.handle('library:retry-migration', async (event) => {
+    requireMainSender(event)
+    await store.waitForStorageReady()
+    const result = store.retryLegacyMigration()
+    if (result.imported) notifyLibraryChanged()
+    return result
+  })
+  ipcMain.handle('library:choose-root', async (event) => {
+    requireMainSender(event)
+    const result = await dialog.showOpenDialog({
+      title: '选择拓 Ta 素材保存位置',
+      defaultPath: store.getLibraryStats().rootDirectory,
+      properties: ['openDirectory', 'createDirectory'],
+    })
+    if (result.canceled || !result.filePaths[0]) return { canceled: true }
+    const rootDirectory = path.resolve(result.filePaths[0])
+    approvedStorageRoots.add(storageRootKey(rootDirectory))
+    return { canceled: false, rootDirectory }
+  })
+  ipcMain.handle('library:open-root', async (event) => {
+    requireMainSender(event)
+    const rootDirectory = store.getLibraryStats().rootDirectory
+    fs.mkdirSync(rootDirectory, { recursive: true })
+    const error = await shell.openPath(rootDirectory)
+    if (error) throw new Error(`无法打开素材保存位置：${error}`)
+  })
+  ipcMain.handle('library:paste', async (event) => {
+    requireMainSender(event)
+    const image = await readClipboardPng()
+    await store.waitForStorageReady()
+    const result = store.addHistory(image.png, image.width, image.height, 'capture', 'paste', '粘贴图片', 'short-term')
+    if (result.created) notifyLibraryChanged()
+    return { created: result.created, item: result.item }
+  })
+  ipcMain.handle('library:import', async (event) => {
+    requireMainSender(event)
+    const result = await dialog.showOpenDialog({
+      title: '导入图片到拓 Ta',
+      properties: ['openFile', 'multiSelections'],
+      filters: [{ name: '图片', extensions: ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'gif', 'tif', 'tiff'] }],
+    })
+    if (result.canceled) return { canceled: true, imported: [], failed: [] }
+    const imported: ReturnType<TaStore['listHistory']> = []
+    const failed: Array<{ filePath: string; error: string }> = []
+    for (const filePath of result.filePaths) {
+      try {
+        const stat = await fs.promises.stat(filePath)
+        if (!stat.isFile() || stat.size > 80 * 1024 * 1024) throw new Error('文件不是图片或超过 80 MB。')
+        const image = await normalizedPngFromBuffer(await fs.promises.readFile(filePath))
+        const title = path.basename(filePath, path.extname(filePath))
+        await store.waitForStorageReady()
+        const added = store.addHistory(image.png, image.width, image.height, 'capture', 'import', title, 'short-term')
+        imported.push(added.item)
+      } catch (error) {
+        failed.push({ filePath, error: error instanceof Error ? error.message : String(error) })
+      }
+    }
+    if (imported.length) notifyLibraryChanged()
+    return { canceled: false, imported, failed }
+  })
+  ipcMain.handle('library:rename', async (event, idValue: unknown, titleValue: unknown) => {
+    requireMainSender(event)
+    await store.waitForStorageReady()
+    const item = store.renameAsset(parseHistoryId(idValue), parseAssetTitle(titleValue))
+    if (!item) throw new Error('图片不存在或已被删除。')
+    notifyLibraryChanged()
+    return item
+  })
+  ipcMain.handle('library:delete-many', async (event, idsValue: unknown) => {
+    requireMainSender(event)
+    const ids = parseHistoryIds(idsValue)
+    const deletedIds: string[] = []
+    const missingIds: string[] = []
+    for (const id of ids) {
+      if (await deleteHistoryToRecycleBin(id)) {
+        deletedIds.push(id)
+        if (lastResult?.id === id) lastResult = undefined
+      } else missingIds.push(id)
+    }
+    if (deletedIds.length) notifyLibraryChanged()
+    return { deletedIds, missingIds }
+  })
+  ipcMain.handle('library:export', async (event, selectionValue: unknown) => {
+    requireMainSender(event)
+    const selection = parseLibraryExportSelection(selectionValue)
+    const description = selection.mode === 'ids' ? `${selection.ids.length} 张图片` : '当前筛选结果'
+    const result = await dialog.showOpenDialog({ title: `选择${description}的导出位置`, properties: ['openDirectory', 'createDirectory'] })
+    if (result.canceled || !result.filePaths[0]) return { canceled: true, exportedCount: 0, missingIds: [] }
+    const destinationDirectory = result.filePaths[0]
+    const missingIds: string[] = []
+    let exportedCount = 0
+    const exportBatch = async (ids: string[]) => {
+      for (let offset = 0; offset < ids.length; offset += 200) {
+        const exported = await store.exportAssets(ids.slice(offset, offset + 200), destinationDirectory)
+        exportedCount += exported.exported.length
+        missingIds.push(...exported.missingIds)
+        await new Promise<void>((resolve) => setImmediate(resolve))
+      }
+    }
+    if (selection.mode === 'ids') {
+      await exportBatch(selection.ids)
+    } else {
+      const excluded = new Set(selection.excludedIds)
+      let cursor: string | undefined
+      do {
+        const page = store.listAssets({ limit: 200, ...selection.filter, cursor })
+        await exportBatch(page.items.map((item) => item.id).filter((id) => !excluded.has(id)))
+        cursor = page.nextCursor
+      } while (cursor)
+    }
+    return { canceled: false, destinationDirectory, exportedCount, missingIds }
+  })
   ipcMain.handle('history:open', async (event, idValue: unknown) => {
     requireMainSender(event)
     const id = parseHistoryId(idValue)
     const image = store.getHistoryImage(id)
     if (!image) throw new Error('截图历史文件不存在。')
-    const item = store.listHistory().find((candidate) => candidate.id === id)
+    const item = store.getHistoryItem(id)
     const size = image.getSize()
     lastResult = { id, imageDataUrl: image.toDataURL(), width: size.width, height: size.height, action: item?.action ?? 'capture', createdAt: item?.createdAt ?? new Date().toISOString() }
     return lastResult
   })
-  ipcMain.handle('history:delete', (event, idValue: unknown) => {
+  ipcMain.handle('history:delete', async (event, idValue: unknown) => {
     requireMainSender(event)
     const id = parseHistoryId(idValue)
-    const deleted = store.deleteHistory(id)
+    const deleted = await deleteHistoryToRecycleBin(id)
     if (deleted && lastResult?.id === id) lastResult = undefined
-    if (deleted && mainWindow && !mainWindow.isDestroyed()) sendWhenReady(mainWindow, 'history:changed', store.listHistory())
+    if (deleted) notifyLibraryChanged()
     return deleted
   })
   ipcMain.on('navigation:home', (event) => { if (isMainSender(event)) void showRoute('home') })
@@ -1282,7 +1822,7 @@ function installIpcHandlers(rebuildTray: () => void) {
   })
 }
 
-function importCpaFromTaskManager(pipedApiKey?: string) {
+async function importCpaFromTaskManager(pipedApiKey?: string) {
   const sourcePath = path.join(app.getPath('appData'), 'sap-ops-task-float', 'settings.json')
   const raw = JSON.parse(fs.readFileSync(sourcePath, 'utf8')) as {
     aiProviders?: Record<string, { baseUrl?: unknown; model?: unknown; encryptedApiKey?: unknown }>
@@ -1305,7 +1845,7 @@ function importCpaFromTaskManager(pipedApiKey?: string) {
   const providers = current.providers.some((provider) => provider.id === cpaProfile.id)
     ? current.providers.map((provider) => provider.id === cpaProfile.id ? { ...provider, ...cpaProfile } : provider)
     : [cpaProfile, ...current.providers]
-  const updated = store.updateSettings({
+  const updated = await store.updateSettings({
     ...current,
     activeProviderId: cpaProfile.id,
     providers,
@@ -1329,7 +1869,7 @@ async function runCpaMaintenanceMode() {
   try {
     if (importMarker) {
       const pipedApiKey = process.env.TA_CPA_IMPORT_FROM_STDIN === '1' ? fs.readFileSync(0, 'utf8') : undefined
-      fs.writeFileSync(marker, JSON.stringify(importCpaFromTaskManager(pipedApiKey)))
+      fs.writeFileSync(marker, JSON.stringify(await importCpaFromTaskManager(pipedApiKey)))
     } else {
       const { profile, apiKey } = store.getActiveProvider()
       if (profile.id !== 'fengsha-cpa') throw new Error('当前生效服务不是风沙 CPA。')
@@ -1361,13 +1901,21 @@ async function runCpaMaintenanceMode() {
 
 async function bootstrap() {
   store = new TaStore()
+  externalCaptureStaging = new ExternalCaptureStaging(path.join(app.getPath('userData'), 'external-capture-staging'))
+  for (const entry of await externalCaptureStaging.recover()) enqueueStagedClipboard(entry)
+  if (externalCaptureStaging.lastRecoveryRejected) {
+    warnClipboardCapacity(`${externalCaptureStaging.lastRecoveryRejected} 张异常暂存图片已隔离，未进入素材库。`)
+  }
+  approvedStorageRoots.add(storageRootKey(store.getLibraryStats().rootDirectory))
   ocr = new OfflineOCR()
   if (await runCpaMaintenanceMode()) return
   startWindowsCaptureHost()
+  syncClipboardMonitor(store.getSettings())
   electronSession.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false))
-  protocol.handle('ta-media', (request) => {
-    const id = new URL(request.url).pathname.split('/').filter(Boolean).at(-1) ?? ''
-    const filePath = store.getHistoryFile(id)
+  protocol.handle('ta-media', async (request) => {
+    const url = new URL(request.url)
+    const id = url.pathname.split('/').filter(Boolean).at(-1) ?? ''
+    const filePath = url.hostname === 'thumbnail' ? await store.getThumbnailFile(id) : store.getHistoryFile(id)
     return filePath ? net.fetch(pathToFileURL(filePath).toString()) : new Response('Not found', { status: 404 })
   })
   const rebuildTray = createTray()
@@ -1389,6 +1937,17 @@ async function bootstrap() {
     let e2eWitness: BrowserWindow | undefined
     try {
       const reportE2eStage = (stage: string) => console.log(`[ta-e2e] ${stage}`)
+      const visualDirectory = process.env.TA_E2E_VISUAL_DIR?.trim()
+      if (visualDirectory) fs.mkdirSync(visualDirectory, { recursive: true })
+      const captureE2eVisual = async (name: string) => {
+        if (!visualDirectory || !mainWindow || mainWindow.isDestroyed()) return
+        await mainWindow.webContents.executeJavaScript('document.fonts.ready')
+        // Capture after the intentional page-enter transition has settled so
+        // visual QA measures the steady UI rather than a half-transparent frame.
+        await new Promise((resolve) => setTimeout(resolve, 430))
+        const image = await mainWindow.capturePage()
+        fs.writeFileSync(path.join(visualDirectory, `${name}.png`), image.toPNG())
+      }
       reportE2eStage('bootstrap')
       if (process.platform === 'win32' && process.env.TA_DISABLE_WINDOWS_CAPTURE_HOST !== '1') {
         const captureHostReadyDeadline = Date.now() + 5_000
@@ -1408,7 +1967,36 @@ async function bootstrap() {
           width,
           height,
         })
+        await captureE2eVisual('01-home')
       }
+      const initialTheme = store.getSettings().theme
+      await mainWindow?.webContents.executeJavaScript("document.querySelector('[data-testid=\"theme-toggle\"]')?.click()")
+      const themeToggleDeadline = Date.now() + 2_000
+      while (store.getSettings().theme !== 'light' && Date.now() < themeToggleDeadline) {
+        await new Promise((resolve) => setTimeout(resolve, 20))
+      }
+      const themeToggleUi = await mainWindow?.webContents.executeJavaScript(`(() => {
+        const shell = document.querySelector('.app-shell')
+        const toggle = document.querySelector('[data-testid="theme-toggle"]')
+        if (!(shell instanceof HTMLElement) || !(toggle instanceof HTMLButtonElement)) return null
+        const style = getComputedStyle(shell)
+        return {
+          theme: shell.dataset.theme || '',
+          label: toggle.getAttribute('aria-label') || '',
+          pressed: toggle.getAttribute('aria-pressed') || '',
+          text: toggle.textContent?.trim() || '',
+          colorScheme: style.colorScheme,
+          backgroundColor: style.backgroundColor,
+        }
+      })()`)
+      const themeToggleVerified = initialTheme === 'dark'
+        && store.getSettings().theme === 'light'
+        && themeToggleUi?.theme === 'light'
+        && themeToggleUi?.label === '切换为夜幕主题'
+        && themeToggleUi?.pressed === 'true'
+        && themeToggleUi?.text.includes('瓷白')
+        && themeToggleUi?.colorScheme === 'light'
+      await captureE2eVisual('01-home-light')
       let desktop: NativeImage
       if (windowsCaptureHostReady) {
         const initialCapture = await screenSourcesFromWindowsHost([display])
@@ -1841,7 +2429,10 @@ async function bootstrap() {
         ? await analyzeNativeImageContent(repeatOverlay.source)
         : undefined
       const repeatGreenWitnessPixels = repeatOverlay.source ? await countGreenWitnessPixels(repeatOverlay.source) : 0
-      const nativeSmartTarget = repeatOverlay.payload.smartSelections?.find((candidate) => candidate.kind === 'window')
+      const nativeSmartTarget = repeatOverlay.payload.smartSelections?.find((candidate) => (
+        candidate.kind === 'window' && candidate.label?.includes('TA E2E SMART WITNESS 7319')
+      ))
+        ?? repeatOverlay.payload.smartSelections?.find((candidate) => candidate.kind === 'window')
         ?? repeatOverlay.payload.smartSelections?.find((candidate) => candidate.kind === 'screen')
       if (!nativeSmartTarget) throw new Error('Windows 原生候选列表为空，无法验证自动边框。')
       const smartPoint = {
@@ -1962,23 +2553,27 @@ async function bootstrap() {
       }
       const settingsBeforeWindowPolicyTest = store.getSettings()
       await showRoute('settings')
+      await captureE2eVisual('02-settings')
       const captureWindowPolicyUiDeadline = Date.now() + 2_000
       let captureWindowPolicyUi: { value: string; options: string[] } | null = null
       let smartSelectionSettingUi: { initial: boolean; saved: boolean } | null = null
-      while (!captureWindowPolicyUi && Date.now() < captureWindowPolicyUiDeadline) {
-        captureWindowPolicyUi = await mainWindow?.webContents.executeJavaScript(`(() => {
+      let smartSelectionInitial = false
+      while ((!captureWindowPolicyUi || !smartSelectionInitial) && Date.now() < captureWindowPolicyUiDeadline) {
+        const settingsUi = await mainWindow?.webContents.executeJavaScript(`(() => {
           const select = document.querySelector('[data-testid="capture-window-policy"]')
-          return select instanceof HTMLSelectElement ? {
-            value: select.value,
-            options: [...select.options].map((option) => option.value),
+          const smartSelection = document.querySelector('[data-testid="smart-selection-enabled"]')
+          return select instanceof HTMLSelectElement && smartSelection instanceof HTMLInputElement ? {
+            captureWindowPolicy: {
+              value: select.value,
+              options: [...select.options].map((option) => option.value),
+            },
+            smartSelectionEnabled: smartSelection.checked,
           } : null
         })()`) ?? null
-        if (!captureWindowPolicyUi) await new Promise((resolve) => setTimeout(resolve, 20))
+        captureWindowPolicyUi = settingsUi?.captureWindowPolicy ?? null
+        smartSelectionInitial = settingsUi?.smartSelectionEnabled === true
+        if (!captureWindowPolicyUi || !smartSelectionInitial) await new Promise((resolve) => setTimeout(resolve, 20))
       }
-      const smartSelectionInitial = Boolean(await mainWindow?.webContents.executeJavaScript(`(() => {
-        const input = document.querySelector('[data-testid="smart-selection-enabled"]')
-        return input instanceof HTMLInputElement && input.checked
-      })()`))
       await mainWindow?.webContents.executeJavaScript(`(() => {
         const select = document.querySelector('[data-testid="capture-window-policy"]')
         const hotkey = document.querySelector('[data-hotkey-action="capture"] input')
@@ -2025,9 +2620,9 @@ async function bootstrap() {
       await showRoute('home')
       const homeHotkeyDeadline = Date.now() + 2_000
       let homeCaptureHotkey = ''
-      while (!homeCaptureHotkey && Date.now() < homeHotkeyDeadline) {
+      while (homeCaptureHotkey !== 'Alt + F1' && Date.now() < homeHotkeyDeadline) {
         homeCaptureHotkey = String(await mainWindow?.webContents.executeJavaScript("document.querySelector('.capture-button kbd')?.textContent || ''") ?? '')
-        if (!homeCaptureHotkey) await new Promise((resolve) => setTimeout(resolve, 20))
+        if (homeCaptureHotkey !== 'Alt + F1') await new Promise((resolve) => setTimeout(resolve, 20))
       }
       await startCapture('capture')
       const keepTaOverlay = [...overlaySessions.values()].find((candidate) => candidate.display.id === display.id)
@@ -2037,7 +2632,7 @@ async function bootstrap() {
       const smartSelectionDisabledApplied = Boolean(keepTaOverlay && keepTaOverlay.payload.smartSelections === undefined)
       const keepTaCaptureTiming = { ...lastCaptureTiming }
       closeOverlays()
-      store.updateSettings(settingsBeforeWindowPolicyTest)
+      await store.updateSettings(settingsBeforeWindowPolicyTest)
       registerHotkeys(settingsBeforeWindowPolicyTest)
       mainWindow?.hide()
       await prewarmOverlayShells()
@@ -2064,20 +2659,89 @@ async function bootstrap() {
         && resultRendered
       reportE2eStage('history-recovered')
 
+      const e2eLibraryAsset = store.addHistory(syntheticPng, 900, 220, 'capture', 'paste', 'E2E 粘贴素材', 'none').item
+      const orientedJpeg = await sharp({ create: { width: 120, height: 80, channels: 3, background: '#d55b43' } })
+        .withMetadata({ orientation: 6 }).jpeg().toBuffer()
+      const normalizedOrientedImage = await normalizedPngFromBuffer(orientedJpeg)
+      const exifOrientationNormalized = normalizedOrientedImage.width === 80 && normalizedOrientedImage.height === 120
+      const libraryQuery = store.listAssets({ limit: 10, search: 'E2E 粘贴素材' })
+      const libraryDatePathVerified = /^\d{4}[\\/]\d{2}[\\/]\d{2}[\\/]/.test(e2eLibraryAsset.relativePath)
+        && Boolean(store.getHistoryFile(e2eLibraryAsset.id))
+      await showRoute('library')
+      const libraryUiDeadline = Date.now() + 3_000
+      let libraryUi: Record<string, unknown> | null = null
+      while (!libraryUi && Date.now() < libraryUiDeadline) {
+        libraryUi = await mainWindow?.webContents.executeJavaScript(`(() => {
+          const page = document.querySelector('.library-page')
+          const paste = document.querySelector('.library-paste-zone')
+          const search = document.querySelector('.library-search input')
+          const date = document.querySelector('.library-date-filter input')
+          const names = [...document.querySelectorAll('.library-card-name')].map((item) => item.textContent || '')
+          const nav = [...document.querySelectorAll('.titlebar nav button')].map((item) => item.textContent || '')
+          const preview = document.querySelector('.library-card-preview img')
+          if (!(page instanceof HTMLElement) || !(paste instanceof HTMLElement) || !(search instanceof HTMLInputElement) || !(date instanceof HTMLInputElement) || !(preview instanceof HTMLImageElement) || !preview.complete || preview.naturalWidth < 1 || !names.includes('E2E 粘贴素材')) return null
+          paste.focus()
+          return {
+            nav,
+            pasteFocused: document.activeElement === paste,
+            pasteTabIndex: paste.tabIndex,
+            pasteCopy: paste.textContent || '',
+            hasSearch: search.placeholder.includes('搜索'),
+            dateType: date.type,
+            assetVisible: names.includes('E2E 粘贴素材'),
+            hasOpenStorage: [...document.querySelectorAll('button')].some((button) => button.textContent?.includes('打开保存位置')),
+            hasSelect: [...document.querySelectorAll('button')].some((button) => button.textContent?.trim() === '选择'),
+            thumbnailWidth: preview.naturalWidth,
+            thumbnailHeight: preview.naturalHeight,
+          }
+        })()`) ?? null
+        if (!libraryUi) await new Promise((resolve) => setTimeout(resolve, 25))
+      }
+      const libraryUiVerified = Boolean(libraryUi
+        && libraryQuery.totalCount === 1
+        && libraryQuery.items[0]?.id === e2eLibraryAsset.id
+        && libraryDatePathVerified
+        && libraryUi.pasteFocused
+        && libraryUi.assetVisible
+        && libraryUi.hasSearch
+        && libraryUi.dateType === 'date'
+        && libraryUi.hasOpenStorage
+        && libraryUi.hasSelect
+        && Number(libraryUi.thumbnailWidth) <= 480
+        && Number(libraryUi.thumbnailHeight) <= 320
+        && Array.isArray(libraryUi.nav)
+        && ['工作台', '素材库', '设置'].every((label) => (libraryUi!.nav as string[]).includes(label)))
+      await captureE2eVisual('03-library')
+      store.deleteHistory(e2eLibraryAsset.id)
+      notifyLibraryChanged()
+      reportE2eStage('library-verified')
+
       const largeEditorPng = await sharp({
         create: { width: 2612, height: 1526, channels: 4, background: { r: 246, g: 244, b: 239, alpha: 1 } },
       }).png().toBuffer()
       await commitResult(nativeImage.createFromBuffer(largeEditorPng), 'capture')
       const largeResultReadyDeadline = Date.now() + 2_000
-      while (Date.now() < largeResultReadyDeadline) {
-        const ready = await mainWindow?.webContents.executeJavaScript("document.querySelector('.result-canvas img')?.naturalWidth === 2612")
-        if (ready) break
+      let largeResultReady = false
+      while (!largeResultReady && Date.now() < largeResultReadyDeadline) {
+        largeResultReady = Boolean(await mainWindow?.webContents.executeJavaScript("document.querySelector('.result-canvas img')?.naturalWidth === 2612"))
+        if (largeResultReady) break
         await new Promise((resolve) => setTimeout(resolve, 20))
       }
-      await mainWindow?.webContents.executeJavaScript(`(() => {
-        const button = [...document.querySelectorAll('.result-toolbar button')].find((candidate) => candidate.textContent.includes('标注'))
-        button?.click()
-      })()`)
+      if (!largeResultReady) throw new Error('大图结果页未在 2 秒内完成渲染。')
+      await captureE2eVisual('04-result')
+      const editorOpenDeadline = Date.now() + 2_000
+      let editorOpened = false
+      while (!editorOpened && Date.now() < editorOpenDeadline) {
+        editorOpened = Boolean(await mainWindow?.webContents.executeJavaScript(`(() => {
+          if (document.querySelector('.editor-stage')) return true
+          const button = [...document.querySelectorAll('.result-toolbar button')].find((candidate) => candidate.textContent.includes('标注'))
+          if (!(button instanceof HTMLButtonElement)) return false
+          button.click()
+          return Boolean(document.querySelector('.editor-stage'))
+        })()`))
+        if (!editorOpened) await new Promise((resolve) => setTimeout(resolve, 25))
+      }
+      if (!editorOpened) throw new Error('标注编辑器未在 2 秒内打开。')
       const editorReadyDeadline = Date.now() + 2_000
       let editorInitialFit: Record<string, unknown> | null = null
       while (!editorInitialFit && Date.now() < editorReadyDeadline) {
@@ -2121,7 +2785,11 @@ async function bootstrap() {
       }
       await new Promise((resolve) => setTimeout(resolve, 80))
       const editorAnnotationVerified = Boolean(await mainWindow?.webContents.executeJavaScript("document.querySelector('.editor-title small')?.textContent.includes('1 个对象')"))
-      await mainWindow?.webContents.executeJavaScript("document.querySelector('.editor-actions button')?.click()")
+      await captureE2eVisual('05-editor')
+      mainWindow?.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Escape' })
+      mainWindow?.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Escape' })
+      await new Promise((resolve) => setTimeout(resolve, 80))
+      const editorEscBackVerified = Boolean(await mainWindow?.webContents.executeJavaScript("!document.querySelector('.editor-shell') && Boolean(document.querySelector('.result-toolbar .back-button'))"))
       reportE2eStage('editor-verified')
 
       const clickResultTool = (label: string) => mainWindow?.webContents.executeJavaScript(`(() => {
@@ -2196,17 +2864,20 @@ async function bootstrap() {
         const brand = document.querySelector('.titlebar .brand')
         const navButton = document.querySelector('.titlebar nav button')
         const windowControls = document.querySelector('.window-controls')
+        const themeToggle = document.querySelector('[data-testid="theme-toggle"]')
         return {
           brandTag: brand?.tagName || '',
           brandRegion: brand ? getComputedStyle(brand).getPropertyValue('-webkit-app-region') : '',
           navButtonRegion: navButton ? getComputedStyle(navButton).getPropertyValue('-webkit-app-region') : '',
           controlsRegion: windowControls ? getComputedStyle(windowControls).getPropertyValue('-webkit-app-region') : '',
+          themeToggleRegion: themeToggle ? getComputedStyle(themeToggle).getPropertyValue('-webkit-app-region') : '',
         }
       })()`)
       const titlebarDragRegionVerified = titlebarDragRegions?.brandTag === 'DIV'
         && titlebarDragRegions?.brandRegion === 'drag'
         && titlebarDragRegions?.navButtonRegion === 'no-drag'
         && titlebarDragRegions?.controlsRegion === 'no-drag'
+        && titlebarDragRegions?.themeToggleRegion === 'no-drag'
 
       mainWindow?.hide()
       const pinId = await createPinWindow(nativeImage.createFromBuffer(syntheticPng).toDataURL())
@@ -2269,6 +2940,52 @@ async function bootstrap() {
       const pinClosed = pin.isDestroyed()
       reportE2eStage('pin-verified')
 
+      const hudSelection = {
+        x: 48,
+        y: 48,
+        width: Math.max(360, Math.min(840, display.bounds.width - 96)),
+        height: Math.max(240, Math.min(640, display.bounds.height - 96)),
+      }
+      await createLongCaptureHud(display, hudSelection)
+      publishLongProgress({ phase: 'capturing', frame: 3, maxFrames: 12, message: '已识别第 3 帧，页面正在下滑' })
+      await new Promise((resolve) => setTimeout(resolve, 180))
+      const hud = longCaptureHudWindow
+      if (!hud || hud.isDestroyed()) throw new Error('长截图状态浮层未创建。')
+      const longCaptureHudUi = await hud.webContents.executeJavaScript(`(() => {
+        const root = document.querySelector('.long-capture-hud')
+        const eyebrow = document.querySelector('.long-capture-eyebrow')
+        const detail = document.querySelector('.long-capture-copy small')
+        return {
+          exists: root instanceof HTMLElement,
+          role: root?.getAttribute('role') || '',
+          eyebrow: eyebrow?.textContent?.trim() || '',
+          detail: detail?.textContent?.trim() || '',
+          progress: root instanceof HTMLElement ? root.style.getPropertyValue('--long-progress') : '',
+        }
+      })()`)
+      const longCaptureHudVisible = hud.isVisible() && hud.getOpacity() === 1
+      if (visualDirectory) {
+        await hud.webContents.executeJavaScript('document.fonts.ready')
+        const hudImage = await hud.capturePage()
+        fs.writeFileSync(path.join(visualDirectory, '06-long-capture-hud.png'), hudImage.toPNG())
+      }
+      hideLongCaptureHudForFrame()
+      await new Promise((resolve) => setTimeout(resolve, 60))
+      const longCaptureHudHiddenForFrame = !hud.isVisible() && hud.getOpacity() === 0
+      showLongCaptureHud()
+      await new Promise((resolve) => setTimeout(resolve, 60))
+      const longCaptureHudRestored = hud.isVisible() && hud.getOpacity() === 1
+      const longCaptureHudVerified = longCaptureHudVisible
+        && longCaptureHudHiddenForFrame
+        && longCaptureHudRestored
+        && longCaptureHudUi.exists
+        && longCaptureHudUi.role === 'status'
+        && longCaptureHudUi.eyebrow.includes('FRAME 03 / 12')
+        && longCaptureHudUi.detail.includes('页面正在自动下滑')
+        && longCaptureHudUi.progress === '23%'
+      destroyLongCaptureHud()
+      reportE2eStage('long-capture-hud-verified')
+
       fs.writeFileSync(process.env.TA_E2E_SMOKE_FILE, JSON.stringify({
         ready: true,
         desktop: desktopSize,
@@ -2328,6 +3045,11 @@ async function bootstrap() {
         overlayWindowBaseline,
         overlayWindowGrowth,
         historyRecoveredAfterEmpty,
+        libraryUiVerified,
+        libraryUi,
+        libraryQueryCount: libraryQuery.totalCount,
+        libraryDatePathVerified,
+        exifOrientationNormalized,
         historyWasEmpty,
         historyCountAfterRecovery: store.listHistory().length,
         historyIdMatches: store.listHistory()[0]?.id === recoveredResult.id,
@@ -2338,6 +3060,14 @@ async function bootstrap() {
         editorInitialFitVerified,
         editorInitialFit,
         editorAnnotationVerified,
+        editorEscBackVerified,
+        longCaptureHudVerified,
+        longCaptureHudVisible,
+        longCaptureHudHiddenForFrame,
+        longCaptureHudRestored,
+        longCaptureHudUi,
+        themeToggleVerified,
+        themeToggleUi,
         titlebarDragRegionVerified,
         titlebarDragRegions,
         captureWindowPolicyUi,
@@ -2378,6 +3108,7 @@ async function bootstrap() {
       fs.writeFileSync(process.env.TA_E2E_SMOKE_FILE, JSON.stringify({ ready: false, error: error instanceof Error ? error.stack ?? error.message : String(error) }))
     } finally {
       if (e2eWitness && !e2eWitness.isDestroyed()) e2eWitness.destroy()
+      destroyLongCaptureHud()
       isQuitting = true
       stopWindowsCaptureHost()
       await Promise.race([ocr.terminate(), new Promise((resolve) => setTimeout(resolve, 2_000))])
@@ -2397,5 +3128,12 @@ else {
 }
 
 app.on('activate', () => void showRoute('home'))
-app.on('before-quit', () => { isQuitting = true; globalShortcut.unregisterAll(); stopWindowsCaptureHost(); void ocr?.terminate() })
+app.on('before-quit', () => {
+  isQuitting = true
+  globalShortcut.unregisterAll()
+  stopWindowsCaptureHost()
+  stopClipboardMonitor()
+  try { store?.close() } catch { /* already closed during shutdown */ }
+  void ocr?.terminate()
+})
 app.on('window-all-closed', () => { /* Windows 版常驻托盘 */ })
