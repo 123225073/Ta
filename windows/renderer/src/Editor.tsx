@@ -1,4 +1,4 @@
-import { PointerEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { MouseEvent, PointerEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { computeEditorFitScale } from './editor-fit'
 import { isEditorCancelShortcut } from './editor-shortcuts'
 
@@ -200,6 +200,7 @@ export function Editor({ imageDataUrl, onCancel, onExport }: EditorProps) {
   }
 
   const begin = (event: PointerEvent<HTMLCanvasElement>) => {
+    if (event.button !== 0) return
     const point = pointFromEvent(event)
     if (tool === 'text') {
       const text = window.prompt('输入标注文字')?.trim()
@@ -256,6 +257,13 @@ export function Editor({ imageDataUrl, onCancel, onExport }: EditorProps) {
     onExport(canvasRef.current!.toDataURL('image/png'))
   }
 
+  const showContextMenu = (event: MouseEvent<HTMLCanvasElement>) => {
+    event.preventDefault()
+    render()
+    const canvas = canvasRef.current
+    if (canvas) void window.ta.showImageContextMenu({ kind: 'data-url', imageDataUrl: canvas.toDataURL('image/png'), suggestedName: '标注图片' })
+  }
+
   const activeTool = useMemo(() => tools.find((item) => item.id === tool), [tool])
 
   return (
@@ -283,7 +291,7 @@ export function Editor({ imageDataUrl, onCancel, onExport }: EditorProps) {
           <output>{Math.round(zoom * 100)}%</output>
         </div>
       </div>
-      <div ref={stageRef} className="editor-stage"><canvas ref={canvasRef} style={{ width: imageSize.width ? imageSize.width * zoom : undefined, height: imageSize.height ? imageSize.height * zoom : undefined, visibility: fitReady ? 'visible' : 'hidden' }} onPointerDown={begin} onPointerMove={move} onPointerUp={finish} /></div>
+      <div ref={stageRef} className="editor-stage"><canvas ref={canvasRef} title="右键可复制或下载当前标注结果" style={{ width: imageSize.width ? imageSize.width * zoom : undefined, height: imageSize.height ? imageSize.height * zoom : undefined, visibility: fitReady ? 'visible' : 'hidden' }} onContextMenu={showContextMenu} onPointerDown={begin} onPointerMove={move} onPointerUp={finish} /></div>
     </section>
   )
 }

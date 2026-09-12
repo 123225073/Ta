@@ -95,6 +95,17 @@ export interface CaptureResult {
   createdAt: string
 }
 
+export type ImageContextMenuRequest =
+  | { kind: 'history'; historyId: string; suggestedName?: string }
+  | { kind: 'data-url'; imageDataUrl: string; suggestedName?: string }
+  | { kind: 'pin' }
+
+export interface ImageContextMenuResult {
+  action: 'copy' | 'download' | 'dismissed' | 'test'
+  canceled?: boolean
+  filePath?: string
+}
+
 export interface OverlayPayload {
   captureId: number
   displayId: string
@@ -144,6 +155,7 @@ declare global {
       copyImage(dataUrl?: string): Promise<{ ok: boolean }>
       copyText(value: string): Promise<{ ok: boolean }>
       saveImage(dataUrl?: string): Promise<{ canceled: boolean; filePath?: string }>
+      showImageContextMenu(request: ImageContextMenuRequest): Promise<ImageContextMenuResult>
       pinImage(dataUrl?: string): Promise<number>
       commitImage(dataUrl: string, action: 'edited' | 'beautified'): Promise<CaptureResult>
       runOCR(dataUrl?: string): Promise<OCRResult>

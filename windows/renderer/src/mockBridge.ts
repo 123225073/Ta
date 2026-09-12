@@ -28,11 +28,11 @@ export function installBrowserMock() {
   if (window.ta) return
   const noOp = () => undefined
   window.ta = {
-    getAppInfo: async () => ({ version: '1.3.2', platform: 'browser-preview', packaged: false }),
+    getAppInfo: async () => ({ version: '1.4.0', platform: 'browser-preview', packaged: false }),
     windowMinimize: noOp, windowToggleMaximize: noOp, windowClose: noOp,
     startCapture: async () => ({ ok: true }), cancelCapture: noOp, getOverlayInit: async () => undefined, getLongCaptureProgress: async () => undefined, reportOverlayReady: noOp, submitSelection: noOp,
     getResult: async () => undefined,
-    copyImage: async () => ({ ok: true }), copyText: async () => ({ ok: true }), saveImage: async () => ({ canceled: true }), pinImage: async () => 1,
+    copyImage: async () => ({ ok: true }), copyText: async () => ({ ok: true }), saveImage: async () => ({ canceled: true }), showImageContextMenu: async () => ({ action: 'test' }), pinImage: async () => 1,
     commitImage: async () => { throw new Error('预览模式不保存图片') },
     runOCR: async () => ({ text: '浏览器预览模式', confidence: 100, language: '简体中文 + English' }),
     runAI: async () => '浏览器预览模式不发送云端请求。',

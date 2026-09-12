@@ -7,7 +7,7 @@
 ### 框住它，拓下来。
 
 [![Windows](https://img.shields.io/badge/Windows-10%2F11-1676D2.svg)](./windows/README.md)
-[![Version](https://img.shields.io/badge/Windows-v1.3.2-FF4D37.svg)](./docs/release-notes-v1.3.2.md)
+[![Version](https://img.shields.io/badge/Windows-v1.4.0-FF4D37.svg)](./docs/release-notes-v1.4.0.md)
 [![Electron](https://img.shields.io/badge/Electron-44-47848F.svg)](./windows/package.json)
 [![License](https://img.shields.io/badge/License-MIT-D6402F.svg)](./LICENSE)
 
@@ -23,7 +23,9 @@
 
 Windows 版不是把 macOS 程序套壳运行，而是针对 Windows 重新实现了屏幕捕获、DPI、多显示器、全局快捷键、托盘、剪贴板、安全存储、安装和窗口生命周期。
 
-## Windows v1.3.2 能做什么
+## Windows v1.4.0 能做什么
+
+- **录屏与剪辑**：全屏、窗口、自选区域录制，暂停/继续，麦克风与系统音独立保存；录后剪切片段、裁剪、局部放大，添加或修改标记，并选择哪些标记融入 MP4。标记随画面缩放和裁剪保持对齐。详见 [1.4.0 使用说明](./docs/release-notes-v1.4.0.md)。
 
 - **通用截图**：鼠标框选后松开即保留选区，可移动、八方向缩放，双击或按 `Enter` 完成。
 - **智能框选**：鼠标移动到窗口时自动识别可见边框；单击锁定，也可以继续手动框选。
@@ -39,6 +41,7 @@ Windows 版不是把 macOS 程序套壳运行，而是针对 Windows 重新实�
 - **可控隐藏**：截图前可选择自动隐藏 Ta、保留 Ta 或每次询问。自动隐藏会从 Windows 合成画面中完全移除 Ta，其他软件不会被隐藏。
 - **外部截图自动收集**：可分别启用飞书、微信和 QQ；默认严格模式组合可信签名进程、同一剪贴板序列，以及微信专属标记、QQ 专用截图进程或飞书默认全局截图快捷键与真实置顶截图浮层上下文，未知来源和普通复制均失败关闭。
 - **本地素材库**：截图、明确粘贴和文件导入按日期长期保存，支持名称搜索、日期筛选、重命名、多选、选择当天、全选筛选结果和批量导出。
+- **全局图片右键**：工作台最近拓片、素材库、结果页、标注画布和钉图均可直接右键复制原图或下载 PNG；标注区复制的是当前已渲染结果。
 - **自定义保存位置**：可在设置中更换图片根目录；切换前逐张复制并校验，迁移期间的新写入会等待完成，不清理旧目录。
 - **瓷白 / 夜幕双主题**：标题栏可一键切换“瓷白典藏”和“夜幕玻璃”，选择立即生效并自动保存；首页、素材库、设置、结果和标注页均完整适配。
 
@@ -80,7 +83,7 @@ Windows 版不是把 macOS 程序套壳运行，而是针对 Windows 重新实�
 Windows 10 22H2 或 Windows 11 x64 用户可运行本项目构建出的：
 
 ```text
-windows/release/Ta-Windows-1.3.2-x64-Setup.exe
+windows/release/Ta-Windows-1.4.0-x64-Setup.exe
 ```
 
 安装器创建桌面和开始菜单快捷方式。覆盖安装不会主动删除用户设置、加密后的 API Key 或截图历史；卸载配置为保留用户数据。
@@ -89,11 +92,13 @@ windows/release/Ta-Windows-1.3.2-x64-Setup.exe
 
 ### 从源码构建
 
-要求：Windows 10/11 x64、Node.js 22+、npm。
+要求：Windows 10/11 x64、Node.js 22+、npm，以及 Visual Studio C++ Build Tools（包含 Windows SDK、CMake、Ninja）。
 
 ```powershell
 cd windows
 npm ci
+npm run build:video
+npm run prepare:video
 npm run dist
 ```
 
@@ -145,6 +150,7 @@ Ta/
 
 - [Windows 版使用与构建](./windows/README.md)
 - [Windows 架构说明](./docs/windows-port-architecture.md)
+- [Windows v1.4.0 更新说明](./docs/release-notes-v1.4.0.md)
 - [Windows v1.3.2 更新说明](./docs/release-notes-v1.3.2.md)
 - [Windows v1.3.1 更新说明](./docs/release-notes-v1.3.1.md)
 - [Windows v1.2.0 外部截图与素材库对抗审查](./docs/windows-external-capture-library-adversarial-review-v1.2.0.md)

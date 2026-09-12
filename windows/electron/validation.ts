@@ -6,6 +6,7 @@ import {
   CaptureWindowPolicy,
   AssetSource,
   ExternalScreenshotApp,
+  ImageContextMenuRequest,
   LibraryListQuery,
   ProviderKind,
   SelectionRect,
@@ -136,6 +137,20 @@ export function parseAssetTitle(value: unknown) {
   const title = boundedString(value, '图片名称', 180)
   if (/[\\/:*?"<>|]/.test(title) || title === '.' || title === '..') inputError('图片名称包含 Windows 文件名不允许的字符。')
   return title
+}
+
+export function parseImageContextMenuRequest(value: unknown): ImageContextMenuRequest {
+  const input = objectValue(value, '图片右键菜单')
+  if (input.kind === 'pin') return { kind: 'pin' }
+  const suggestedName = input.suggestedName === undefined ? undefined : parseAssetTitle(input.suggestedName)
+  if (input.kind === 'history') {
+    return { kind: 'history', historyId: parseHistoryId(input.historyId), suggestedName }
+  }
+  if (input.kind === 'data-url') {
+    parsePngDataUrl(input.imageDataUrl)
+    return { kind: 'data-url', imageDataUrl: input.imageDataUrl as string, suggestedName }
+  }
+  inputError('图片右键菜单来源不受支持。')
 }
 
 export function parseLibraryListQuery(value: unknown): LibraryListQuery {

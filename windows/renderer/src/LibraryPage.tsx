@@ -198,6 +198,12 @@ function AssetCard({
         aria-label={selectionMode ? `${selected ? '取消选择' : '选择'} ${asset.name}` : `打开 ${asset.name}`}
         aria-pressed={selectionMode ? selected : undefined}
         onClick={selectionMode ? onToggle : onOpen}
+        title="右键可复制或下载"
+        onContextMenu={(event) => {
+          event.preventDefault()
+          event.stopPropagation()
+          void window.ta.showImageContextMenu({ kind: 'history', historyId: asset.id, suggestedName: asset.name })
+        }}
       >
         {asset.thumbnailUrl
           ? <img src={asset.thumbnailUrl} alt="" loading="lazy" decoding="async" />

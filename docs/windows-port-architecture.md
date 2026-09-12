@@ -26,7 +26,7 @@ windows/
 │   └── LongCaptureHud.tsx 长截图采集状态浮层
 ├── resources/capture/ta-clipboard-monitor.ps1 剪贴板所有者与签名监听
 ├── scripts/             资源准备、监听验证和真实启动/E2E 烟测
-└── package.json         v1.3.2 与 NSIS 打包配置
+└── package.json         v1.3.3 与 NSIS 打包配置
 ```
 
 ## 安全边界
@@ -34,6 +34,7 @@ windows/
 - 渲染层启用 `contextIsolation`、禁用 `nodeIntegration`、启用 sandbox，只能调用 preload 暴露的白名单方法。
 - API Key 由 Electron `safeStorage` 使用 Windows 当前用户安全上下文加密，设置页只显示“已保存”，不回传明文。
 - `ta-media` 自定义协议只根据本地历史索引读取已知图片，不接受任意文件路径。
+- 图片右键菜单由主进程统一创建；渲染层只能提交受校验的历史 ID、PNG 数据或当前钉图引用，不能传入任意文件路径。工作台/素材库解析原图，编辑器解析已渲染画布。
 - 本地 OCR 不联网；AI 识图和翻译必须由用户主动点击，并可开启逐次上传确认。
 - 素材库使用 SQLite 键集分页，不设业务数量上限；原图按日期目录长期保留，容量只受用户磁盘限制。
 - 外部剪贴板先核对稳定 sequence、所有者 PID、路径、产品、公司、有效 Authenticode 发布者、证书主题/指纹和截图格式，再读取图片；读取前后再次核验同一事件。

@@ -66,6 +66,7 @@ function TitleBar({ page, version, theme, themeBusy, onNavigate, onThemeToggle }
       <nav>
         <button className={page === 'home' ? 'active' : ''} onClick={() => onNavigate('home')}>工作台</button>
         <button className={page === 'library' ? 'active' : ''} onClick={() => onNavigate('library')}>素材库</button>
+        <button onClick={() => void window.taVideo.open()}>录屏与剪辑</button>
         <button className={page === 'settings' ? 'active' : ''} onClick={() => onNavigate('settings')}>设置</button>
       </nav>
       <div className="titlebar-actions">
@@ -188,7 +189,16 @@ function Home({ history, hotkeys, onCapture, onOpenHistory, onDeleteHistory, onL
           <div className="history-grid">
             {history.slice(0, 8).map((item) => (
               <article className="history-card" key={item.id}>
-                <button className="history-preview" onClick={() => onOpenHistory(item.id)}><img src={item.thumbnailUrl} alt={actionNames[item.action]} /></button>
+                <button
+                  className="history-preview"
+                  title="右键可复制或下载"
+                  onClick={() => onOpenHistory(item.id)}
+                  onContextMenu={(event) => {
+                    event.preventDefault()
+                    event.stopPropagation()
+                    void window.ta.showImageContextMenu({ kind: 'history', historyId: item.id, suggestedName: item.title })
+                  }}
+                ><img src={item.thumbnailUrl} alt={actionNames[item.action]} /></button>
                 <div><span><b>{actionNames[item.action]}</b><small>{formatDate(item.createdAt)} · {item.width}×{item.height}</small></span><button title="删除" onClick={() => onDeleteHistory(item.id)}>×</button></div>
               </article>
             ))}
@@ -414,7 +424,15 @@ function ResultPage({ result, settings, onBack, notify }: { result?: CaptureResu
         <span className="result-meta">{current.width} × {current.height}</span>
       </div>
       <div className={`result-workspace ${panel ? 'with-panel' : ''}`}>
-        <div className="result-canvas"><div className="image-mat"><img src={current.imageDataUrl} alt="截图结果" /></div></div>
+        <div className="result-canvas"><div className="image-mat"><img
+          src={current.imageDataUrl}
+          alt="截图结果"
+          title="右键可复制或下载"
+          onContextMenu={(event) => {
+            event.preventDefault()
+            void window.ta.showImageContextMenu({ kind: 'data-url', imageDataUrl: current.imageDataUrl, suggestedName: '截图结果' })
+          }}
+        /></div></div>
         {panel && (() => {
           const entry = toolCache[panel]
           const loading = entry.status === 'loading'
@@ -443,7 +461,7 @@ export function App({ initialRoute }: { initialRoute?: string }) {
   const [themeFallback, setThemeFallback] = useState<AppSettings['theme']>(cachedTheme)
   const [themeBusy, setThemeBusy] = useState(false)
   const [result, setResult] = useState<CaptureResult>()
-  const [version, setVersion] = useState('1.3.2')
+  const [version, setVersion] = useState('1.4.0')
   const [notice, setNotice] = useState<Notice>()
   const [hotkeyStatus, setHotkeyStatus] = useState<Record<string, boolean>>({})
 

@@ -34,6 +34,8 @@ import {
   AssetSource,
   CaptureAction,
   CaptureResult,
+  ImageContextMenuRequest,
+  ImageContextMenuResult,
   LongCaptureProgress,
   OverlayPayload,
   SelectionRect,
@@ -44,6 +46,7 @@ import { analyzeImageContent, analyzePixelContent, type ImageContentStats } from
 import { frameMeanDifference, stitchVerticalFrames } from './stitch'
 import { mapWindowCandidatesToDisplay, type PhysicalWindowRect } from './smart-selection'
 import { TaStore } from './store'
+import { VideoController } from './video/controller'
 import { classifyClipboardSource, type ClipboardSourceEvent, type ExternalScreenshotApp } from './clipboard-source'
 import {
   ExternalCaptureStaging,
@@ -59,6 +62,7 @@ import {
   parseExternalUrl,
   parseHistoryId,
   parseHistoryIds,
+  parseImageContextMenuRequest,
   parseLibraryListQuery,
   parseLibraryExportSelection,
   parsePinCommand,
@@ -75,9 +79,13 @@ const isDevelopment = Boolean(process.env.TA_DEV_SERVER_URL)
 
 protocol.registerSchemesAsPrivileged([
   { scheme: 'ta-media', privileges: { secure: true, supportFetchAPI: true, standard: true } },
+  { scheme: 'ta-video', privileges: { secure: true, supportFetchAPI: true, standard: true, stream: true } },
 ])
 
 let mainWindow: BrowserWindow | undefined
+let videoController: VideoController | undefined
+let videoShutdownDone = false
+let videoShutdownPending = false
 let tray: Tray | undefined
 let store: TaStore
 let ocr: OfflineOCR
@@ -93,6 +101,14 @@ let lastCaptureHydration: Promise<void> | undefined
 const e2eAiRunCounts = { vision: 0, translate: 0 }
 let e2eCopiedText = ''
 let e2eCopiedImageSha256 = ''
+const e2eImageContextMenuRequests: Array<{
+  kind: ImageContextMenuRequest['kind']
+  sender: 'main' | 'pin'
+  width: number
+  height: number
+  sha256: string
+  menuLabels: string[]
+}> = []
 const pinWindows = new Set<BrowserWindow>()
 
 interface OverlaySession {
@@ -1181,6 +1197,96 @@ async function writeImageToClipboard(image: NativeImage) {
   await clipboard.write([new ClipboardItem({ 'image/png': new Blob([png], { type: 'image/png' }) })])
 }
 
+function defaultImageFileName(suggestedName?: string) {
+  const fallback = `Ta-${new Date().toISOString().replace(/[:.]/g, '-')}`
+  const clean = (suggestedName?.replace(/[\\/:*?"<>|]/g, '-').replace(/[. ]+$/g, '').trim() || fallback).slice(0, 180)
+  return clean.toLocaleLowerCase('en-US').endsWith('.png') ? clean : `${clean}.png`
+}
+
+async function saveImageToFile(image: NativeImage, suggestedName?: string, owner?: BrowserWindow) {
+  const options: Electron.SaveDialogOptions = {
+    title: '下载图片',
+    defaultPath: defaultImageFileName(suggestedName),
+    filters: [{ name: 'PNG 图片', extensions: ['png'] }],
+  }
+  const result = owner && !owner.isDestroyed()
+    ? await dialog.showSaveDialog(owner, options)
+    : await dialog.showSaveDialog(options)
+  if (result.canceled || !result.filePath) return { canceled: true }
+  fs.writeFileSync(result.filePath, image.toPNG())
+  return { canceled: false, filePath: result.filePath }
+}
+
+function resolveContextMenuImage(event: Electron.IpcMainInvokeEvent, request: ImageContextMenuRequest) {
+  const sender = isMainSender(event) ? 'main' as const : pinPayloads.has(event.sender.id) ? 'pin' as const : undefined
+  if (!sender) throw new Error('拒绝来自未知窗口的图片右键菜单请求。')
+  if (request.kind === 'pin') {
+    if (sender !== 'pin') throw new Error('主窗口不能读取钉图窗口内容。')
+    const imageDataUrl = pinPayloads.get(event.sender.id)
+    if (!imageDataUrl) throw new Error('钉图内容已失效。')
+    return { image: checkedImage(parsePngDataUrl(imageDataUrl)), suggestedName: '钉图', sender }
+  }
+  if (sender !== 'main') throw new Error('钉图窗口不能读取其他图片。')
+  if (request.kind === 'history') {
+    const image = store.getHistoryImage(request.historyId)
+    if (!image) throw new Error('图片原文件不存在。')
+    return { image, suggestedName: request.suggestedName ?? store.getHistoryItem(request.historyId)?.title, sender }
+  }
+  return { image: checkedImage(parsePngDataUrl(request.imageDataUrl)), suggestedName: request.suggestedName, sender }
+}
+
+function showImageContextMenu(event: Electron.IpcMainInvokeEvent, value: unknown): Promise<ImageContextMenuResult> {
+  const request = parseImageContextMenuRequest(value)
+  const { image, suggestedName, sender } = resolveContextMenuImage(event, request)
+  const menuLabels = ['复制图片', '下载图片…']
+  if (process.env.TA_E2E_SMOKE_FILE) {
+    const size = image.getSize()
+    e2eImageContextMenuRequests.push({
+      kind: request.kind,
+      sender,
+      width: size.width,
+      height: size.height,
+      sha256: crypto.createHash('sha256').update(image.toPNG()).digest('hex'),
+      menuLabels,
+    })
+    return Promise.resolve({ action: 'test' })
+  }
+  const owner = BrowserWindow.fromWebContents(event.sender) ?? undefined
+  return new Promise((resolve) => {
+    let selected = false
+    const menu = Menu.buildFromTemplate([
+      {
+        label: menuLabels[0],
+        click: () => {
+          selected = true
+          void writeImageToClipboard(image)
+            .then(() => {
+              new Notification({ title: '拓 Ta', body: '图片已复制，可直接粘贴' }).show()
+              resolve({ action: 'copy' })
+            })
+            .catch((error) => {
+              void reportOperationError('复制图片失败', error)
+              resolve({ action: 'copy', canceled: true })
+            })
+        },
+      },
+      {
+        label: menuLabels[1],
+        click: () => {
+          selected = true
+          void saveImageToFile(image, suggestedName, owner)
+            .then((result) => resolve({ action: 'download', ...result }))
+            .catch((error) => {
+              void reportOperationError('下载图片失败', error)
+              resolve({ action: 'download', canceled: true })
+            })
+        },
+      },
+    ])
+    menu.popup({ window: owner, callback: () => { if (!selected) resolve({ action: 'dismissed', canceled: true }) } })
+  })
+}
+
 async function commitResult(image: NativeImage, action: CaptureResult['action'], show = true, source?: AssetSource, title?: string) {
   const size = image.getSize()
   await store.waitForStorageReady()
@@ -1415,9 +1521,10 @@ async function createPinWindow(imageDataUrl: string) {
 }
 
 function registerHotkeys(settings: AppSettings) {
+  videoController?.releaseHotkeys()
   globalShortcut.unregisterAll()
   const statuses: Record<string, boolean> = {}
-  if (hotkeysSuspended) return Object.fromEntries(Object.keys(settings.hotkeys).map((action) => [action, true]))
+  if (hotkeysSuspended) { videoController?.registerHotkeys(); return Object.fromEntries(Object.keys(settings.hotkeys).map((action) => [action, true])) }
   for (const [action, accelerator] of Object.entries(settings.hotkeys)) {
     if (!accelerator) {
       statuses[action] = true
@@ -1430,6 +1537,7 @@ function registerHotkeys(settings: AppSettings) {
     }
   }
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('hotkeys:status', statuses)
+  videoController?.registerHotkeys()
   return statuses
 }
 
@@ -1450,6 +1558,7 @@ function createTray() {
   const rebuild = () => {
     tray?.setContextMenu(Menu.buildFromTemplate([
       { label: '打开拓 Ta', click: () => void showRoute('home') },
+      { label: '录屏与剪辑', click: () => void videoController?.open() },
       { type: 'separator' },
       { label: '通用截图', accelerator: store.getSettings().hotkeys.capture, click: () => void startCapture('capture') },
       { label: '极速取字', accelerator: store.getSettings().hotkeys.ocr, click: () => void startCapture('ocr') },
@@ -1576,16 +1685,9 @@ function installIpcHandlers(rebuildTray: () => void) {
   })
   ipcMain.handle('image:save', async (event, dataUrl?: unknown) => {
     requireMainSender(event)
-    const image = imageFromOptionalDataUrl(dataUrl)
-    const result = await dialog.showSaveDialog({
-      title: '保存截图',
-      defaultPath: `Ta-${new Date().toISOString().replace(/[:.]/g, '-')}.png`,
-      filters: [{ name: 'PNG 图片', extensions: ['png'] }],
-    })
-    if (result.canceled || !result.filePath) return { canceled: true }
-    fs.writeFileSync(result.filePath, image.toPNG())
-    return { canceled: false, filePath: result.filePath }
+    return saveImageToFile(imageFromOptionalDataUrl(dataUrl), undefined, BrowserWindow.fromWebContents(event.sender) ?? undefined)
   })
+  ipcMain.handle('image:context-menu', (event, request: unknown) => showImageContextMenu(event, request))
   ipcMain.handle('image:pin', async (event, dataUrl?: unknown) => {
     requireMainSender(event)
     return createPinWindow(imageFromOptionalDataUrl(dataUrl).toDataURL())
@@ -1918,6 +2020,7 @@ async function bootstrap() {
     const filePath = url.hostname === 'thumbnail' ? await store.getThumbnailFile(id) : store.getHistoryFile(id)
     return filePath ? net.fetch(pathToFileURL(filePath).toString()) : new Response('Not found', { status: 404 })
   })
+  videoController = new VideoController(loadRoute, () => store.getSettings().theme)
   const rebuildTray = createTray()
   installIpcHandlers(rebuildTray)
   const hotkeyStatus = registerHotkeys(store.getSettings())
@@ -1947,6 +2050,22 @@ async function bootstrap() {
         await new Promise((resolve) => setTimeout(resolve, 430))
         const image = await mainWindow.capturePage()
         fs.writeFileSync(path.join(visualDirectory, `${name}.png`), image.toPNG())
+      }
+      const dispatchImageContextMenu = async (window: BrowserWindow, selector: string) => {
+        const before = e2eImageContextMenuRequests.length
+        const dispatched = await window.webContents.executeJavaScript(`(() => {
+          const target = document.querySelector(${JSON.stringify(selector)})
+          if (!(target instanceof HTMLElement)) return false
+          return !target.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2 }))
+        })()`)
+        if (!dispatched) throw new Error(`图片右键事件未被页面处理：${selector}`)
+        const deadline = Date.now() + 2_000
+        while (e2eImageContextMenuRequests.length === before && Date.now() < deadline) {
+          await new Promise((resolve) => setTimeout(resolve, 20))
+        }
+        const request = e2eImageContextMenuRequests.at(-1)
+        if (!request || e2eImageContextMenuRequests.length !== before + 1) throw new Error(`图片右键菜单未到达主进程：${selector}`)
+        return request
       }
       reportE2eStage('bootstrap')
       if (process.platform === 'win32' && process.env.TA_DISABLE_WINDOWS_CAPTURE_HOST !== '1') {
@@ -2108,6 +2227,12 @@ async function bootstrap() {
           if (witnessProbeSource) mainHideWitnessPixelsBefore = await countMainHideWitnessPixels(witnessProbeSource, mainBoundsBeforeHide)
           if (mainHideWitnessPixelsBefore < 2_000) await new Promise((resolve) => setTimeout(resolve, 40))
         }
+        // A physical desktop can expose the dedicated always-on-top witness
+        // while another foreground surface still obscures the main-window
+        // witness. Only claim this assertion is supported when the exact
+        // before-image target is visible; otherwise the later ratio would be
+        // a false pass/fail about pixels that were never present.
+        capturePixelWitnessSupported = capturePixelWitnessSupported && mainHideWitnessPixelsBefore >= 2_000
       }
       const captureStartedAt = performance.now()
       await startCapture('capture')
@@ -2659,6 +2784,13 @@ async function bootstrap() {
         && resultRendered
       reportE2eStage('history-recovered')
 
+      await showRoute('home')
+      const homeContextMenuDeadline = Date.now() + 2_000
+      while (!await mainWindow?.webContents.executeJavaScript("Boolean(document.querySelector('.history-preview img'))") && Date.now() < homeContextMenuDeadline) {
+        await new Promise((resolve) => setTimeout(resolve, 20))
+      }
+      const homeImageContextMenu = await dispatchImageContextMenu(mainWindow!, '.history-preview')
+
       const e2eLibraryAsset = store.addHistory(syntheticPng, 900, 220, 'capture', 'paste', 'E2E 粘贴素材', 'none').item
       const orientedJpeg = await sharp({ create: { width: 120, height: 80, channels: 3, background: '#d55b43' } })
         .withMetadata({ orientation: 6 }).jpeg().toBuffer()
@@ -2711,6 +2843,7 @@ async function bootstrap() {
         && Number(libraryUi.thumbnailHeight) <= 320
         && Array.isArray(libraryUi.nav)
         && ['工作台', '素材库', '设置'].every((label) => (libraryUi!.nav as string[]).includes(label)))
+      const libraryImageContextMenu = await dispatchImageContextMenu(mainWindow!, '.library-card-preview')
       await captureE2eVisual('03-library')
       store.deleteHistory(e2eLibraryAsset.id)
       notifyLibraryChanged()
@@ -2728,6 +2861,7 @@ async function bootstrap() {
         await new Promise((resolve) => setTimeout(resolve, 20))
       }
       if (!largeResultReady) throw new Error('大图结果页未在 2 秒内完成渲染。')
+      const resultImageContextMenu = await dispatchImageContextMenu(mainWindow!, '.result-canvas img')
       await captureE2eVisual('04-result')
       const editorOpenDeadline = Date.now() + 2_000
       let editorOpened = false
@@ -2785,6 +2919,15 @@ async function bootstrap() {
       }
       await new Promise((resolve) => setTimeout(resolve, 80))
       const editorAnnotationVerified = Boolean(await mainWindow?.webContents.executeJavaScript("document.querySelector('.editor-title small')?.textContent.includes('1 个对象')"))
+      const editorRightClickNoAnnotation = Boolean(await mainWindow?.webContents.executeJavaScript(`(() => {
+        const canvas = document.querySelector('.editor-stage canvas')
+        if (!(canvas instanceof HTMLCanvasElement)) return false
+        const eventOptions = { bubbles: true, cancelable: true, button: 2, buttons: 2, pointerId: 73, clientX: 50, clientY: 50 }
+        canvas.dispatchEvent(new PointerEvent('pointerdown', eventOptions))
+        canvas.dispatchEvent(new PointerEvent('pointerup', { ...eventOptions, buttons: 0 }))
+        return document.querySelector('.editor-title small')?.textContent.includes('1 个对象') === true
+      })()`))
+      const editorImageContextMenu = await dispatchImageContextMenu(mainWindow!, '.editor-stage canvas')
       await captureE2eVisual('05-editor')
       mainWindow?.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Escape' })
       mainWindow?.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Escape' })
@@ -2905,6 +3048,7 @@ async function bootstrap() {
         && pinRegions.imageCursor === 'move'
         && pinRegions.imageDraggable === false
         && pinRotationApplied
+      const pinImageContextMenu = await dispatchImageContextMenu(pin, '.pin-window img')
       const pinBoundsBeforeDrag = await inspectNativeWindow(pin)
       await pin.webContents.executeJavaScript(`(() => {
         const image = document.querySelector('.pin-window img')
@@ -2938,6 +3082,16 @@ async function bootstrap() {
       })()`)
       await new Promise((resolve) => setTimeout(resolve, 100))
       const pinClosed = pin.isDestroyed()
+      const imageContextMenusVerified = e2eImageContextMenuRequests.length === 5
+        && [homeImageContextMenu, libraryImageContextMenu, resultImageContextMenu, editorImageContextMenu, pinImageContextMenu]
+          .every((request) => request.menuLabels.join('|') === '复制图片|下载图片…')
+        && homeImageContextMenu.kind === 'history' && homeImageContextMenu.sender === 'main' && homeImageContextMenu.width === 900 && homeImageContextMenu.height === 220
+        && libraryImageContextMenu.kind === 'history' && libraryImageContextMenu.sender === 'main' && libraryImageContextMenu.width === 900 && libraryImageContextMenu.height === 220
+        && resultImageContextMenu.kind === 'data-url' && resultImageContextMenu.sender === 'main' && resultImageContextMenu.width === 2612 && resultImageContextMenu.height === 1526
+        && editorImageContextMenu.kind === 'data-url' && editorImageContextMenu.sender === 'main' && editorImageContextMenu.width === 2612 && editorImageContextMenu.height === 1526
+        && editorImageContextMenu.sha256 !== resultImageContextMenu.sha256
+        && editorRightClickNoAnnotation
+        && pinImageContextMenu.kind === 'pin' && pinImageContextMenu.sender === 'pin' && pinImageContextMenu.width === 900 && pinImageContextMenu.height === 220
       reportE2eStage('pin-verified')
 
       const hudSelection = {
@@ -3061,6 +3215,9 @@ async function bootstrap() {
         editorInitialFit,
         editorAnnotationVerified,
         editorEscBackVerified,
+        editorRightClickNoAnnotation,
+        imageContextMenusVerified,
+        imageContextMenus: e2eImageContextMenuRequests,
         longCaptureHudVerified,
         longCaptureHudVisible,
         longCaptureHudHiddenForFrame,
@@ -3128,7 +3285,8 @@ else {
 }
 
 app.on('activate', () => void showRoute('home'))
-app.on('before-quit', () => {
+app.on('before-quit', (event) => {
+  if (videoController && !videoShutdownDone) { event.preventDefault(); if (!videoShutdownPending) { videoShutdownPending = true; void videoController.shutdown().then(() => { videoShutdownDone = true; app.quit() }).catch(() => { videoShutdownPending = false }) } return }
   isQuitting = true
   globalShortcut.unregisterAll()
   stopWindowsCaptureHost()

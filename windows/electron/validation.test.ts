@@ -6,6 +6,7 @@ import {
   parseExternalUrl,
   parseLibraryListQuery,
   parseHistoryId,
+  parseImageContextMenuRequest,
   parsePinCommand,
   parsePinPoint,
   parsePngDataUrl,
@@ -44,6 +45,15 @@ describe('untrusted input validation', () => {
     expect(parseHistoryId('1756300000000-12ab34cd')).toBe('1756300000000-12ab34cd')
     expect(parseHistoryId('1756300000000-12ab34cd56ef7890')).toBe('1756300000000-12ab34cd56ef7890')
     expect(() => parseHistoryId('../../settings')).toThrow(/编号无效/)
+  })
+
+  it('validates every supported image context-menu source', () => {
+    expect(parseImageContextMenuRequest({ kind: 'history', historyId: '1756300000000-12ab34cd', suggestedName: '项目截图' })).toEqual({ kind: 'history', historyId: '1756300000000-12ab34cd', suggestedName: '项目截图' })
+    expect(parseImageContextMenuRequest({ kind: 'data-url', imageDataUrl: onePixelPng })).toEqual({ kind: 'data-url', imageDataUrl: onePixelPng })
+    expect(parseImageContextMenuRequest({ kind: 'pin' })).toEqual({ kind: 'pin' })
+    expect(() => parseImageContextMenuRequest({ kind: 'history', historyId: '../../settings' })).toThrow(/编号无效/)
+    expect(() => parseImageContextMenuRequest({ kind: 'data-url', imageDataUrl: 'file:///C:/secret.png' })).toThrow(/PNG/)
+    expect(() => parseImageContextMenuRequest({ kind: 'filesystem', path: 'C:\\secret.png' })).toThrow(/来源不受支持/)
   })
 
   it('allows the pin window to leave click-through mode but rejects forged commands', () => {

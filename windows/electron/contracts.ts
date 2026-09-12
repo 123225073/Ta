@@ -127,6 +127,17 @@ export interface CaptureResult {
   createdAt: string
 }
 
+export type ImageContextMenuRequest =
+  | { kind: 'history'; historyId: string; suggestedName?: string }
+  | { kind: 'data-url'; imageDataUrl: string; suggestedName?: string }
+  | { kind: 'pin' }
+
+export interface ImageContextMenuResult {
+  action: 'copy' | 'download' | 'dismissed' | 'test'
+  canceled?: boolean
+  filePath?: string
+}
+
 export interface OCRResult {
   text: string
   confidence: number

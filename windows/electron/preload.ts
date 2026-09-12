@@ -2,6 +2,33 @@ import { contextBridge, ipcRenderer } from 'electron'
 
 type Listener = (...args: any[]) => void
 
+contextBridge.exposeInMainWorld('taVideo', {
+  open: () => ipcRenderer.invoke('video:open'),
+  closeReady: () => ipcRenderer.invoke('video:close-ready'),
+  onClosing: (fn: Listener) => subscribe('video:closing', fn),
+  init: () => ipcRenderer.invoke('video:init'),
+  sources: () => ipcRenderer.invoke('video:sources'),
+  microphones: () => ipcRenderer.invoke('video:microphones'),
+  list: () => ipcRenderer.invoke('video:list'),
+  get: (id: string) => ipcRenderer.invoke('video:get', id),
+  save: (id: string, edits: unknown) => ipcRenderer.invoke('video:save', id, edits),
+  start: (options: unknown) => ipcRenderer.invoke('video:start', options),
+  pause: (paused: boolean) => ipcRenderer.invoke('video:pause', paused),
+  stop: () => ipcRenderer.invoke('video:stop'),
+  ink: () => ipcRenderer.invoke('video:ink'),
+  mark: (mark: unknown) => ipcRenderer.invoke('video:mark', mark),
+  clear: () => ipcRenderer.invoke('video:clear'),
+  undoMark: () => ipcRenderer.invoke('video:undo-mark'),
+  settings: (value: unknown) => ipcRenderer.invoke('video:settings', value),
+  chooseRoot: () => ipcRenderer.invoke('video:choose-root'),
+  folder: (id?: string) => ipcRenderer.invoke('video:folder', id),
+  export: (id: string, height: number) => ipcRenderer.invoke('video:export', id, height),
+  cancelExport: () => ipcRenderer.invoke('video:cancel-export'),
+  onState: (fn: Listener) => subscribe('video:state', fn),
+  onFinished: (fn: Listener) => subscribe('video:finished', fn),
+  onExport: (fn: Listener) => subscribe('video:export-progress', fn),
+})
+
 function subscribe(channel: string, listener: Listener) {
   const wrapped = (_event: Electron.IpcRendererEvent, ...args: any[]) => listener(...args)
   ipcRenderer.on(channel, wrapped)
@@ -23,6 +50,7 @@ contextBridge.exposeInMainWorld('ta', {
   copyImage: (dataUrl?: string) => ipcRenderer.invoke('image:copy', dataUrl),
   copyText: (value: string) => ipcRenderer.invoke('text:copy', value),
   saveImage: (dataUrl?: string) => ipcRenderer.invoke('image:save', dataUrl),
+  showImageContextMenu: (request: unknown) => ipcRenderer.invoke('image:context-menu', request),
   pinImage: (dataUrl?: string) => ipcRenderer.invoke('image:pin', dataUrl),
   commitImage: (dataUrl: string, action: string) => ipcRenderer.invoke('image:commit', dataUrl, action),
   runOCR: (dataUrl?: string) => ipcRenderer.invoke('ocr:run', dataUrl),

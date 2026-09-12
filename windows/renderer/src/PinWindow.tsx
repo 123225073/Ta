@@ -36,7 +36,7 @@ export function PinWindow() {
 
   return (
     <main className="pin-window">
-      {image && <img src={image} alt="钉图" draggable={false} onPointerDown={beginMove} onPointerMove={move} onPointerUp={endMove} onPointerCancel={endMove} style={{ transform: `rotate(${rotation}deg) scaleX(${flipped ? -1 : 1})` }} />}
+      {image && <img src={image} alt="钉图" title="右键可复制或下载" draggable={false} onContextMenu={(event) => { event.preventDefault(); void window.ta.showImageContextMenu({ kind: 'pin' }) }} onPointerDown={beginMove} onPointerMove={move} onPointerUp={endMove} onPointerCancel={endMove} style={{ transform: `rotate(${rotation}deg) scaleX(${flipped ? -1 : 1})` }} />}
       <div className="pin-tools" onMouseEnter={() => window.ta.pinCommand('interactive')}>
         <button title="旋转" onClick={() => setRotation((value) => (value + 90) % 360)}>↻</button>
         <button title="水平翻转" onClick={() => setFlipped((value) => !value)}>↔</button>

@@ -7,6 +7,11 @@ const projectDir = path.resolve(__dirname, '..')
 const electronBinary = require('electron')
 const smokeFile = path.join(os.tmpdir(), `ta-windows-smoke-${process.pid}.json`)
 const smokeUserData = fs.mkdtempSync(path.join(os.tmpdir(), `ta-windows-smoke-profile-${process.pid}-`))
+// Isolated accelerators allow the development smoke to coexist with the user's
+// installed Ta instance without replacing its shortcuts or stopping that app.
+fs.writeFileSync(path.join(smokeUserData, 'settings.json'), JSON.stringify({
+  hotkeys: Object.fromEntries(['ocr', 'capture', 'copy', 'pin', 'long', 'translate'].map((name, i) => [name, `Ctrl+Alt+Shift+F${i + 1}`])),
+}))
 try { fs.unlinkSync(smokeFile) } catch { /* no stale marker */ }
 
 const environment = { ...process.env, TA_SMOKE_FILE: smokeFile, TA_E2E_USER_DATA_DIR: smokeUserData }
@@ -38,7 +43,7 @@ child.on('exit', (code) => {
   }
   const result = JSON.parse(fs.readFileSync(smokeFile, 'utf8'))
   fs.unlinkSync(smokeFile)
-  if (!result.ready || result.platform !== 'win32' || result.version !== '1.3.2' || Object.values(result.hotkeyStatus ?? {}).some((value) => !value)) {
+  if (!result.ready || result.platform !== 'win32' || result.version !== '1.4.0' || Object.values(result.hotkeyStatus ?? {}).some((value) => !value)) {
     console.error(`Unexpected smoke result: ${JSON.stringify(result)}`)
     process.exitCode = 1
     return

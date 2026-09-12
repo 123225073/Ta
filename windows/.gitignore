@@ -8,3 +8,5 @@ renderer/public/icon.png
 output/
 .playwright-cli/
 *.log
+native/**/build/
+resources/video/
