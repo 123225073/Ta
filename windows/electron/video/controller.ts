@@ -6,6 +6,9 @@ import { pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 import { VideoStore } from './store'
 import { VideoExporter } from './export'
+import { SopService, type AIContext } from '../sop/service'
+import { installSop } from '../sop/ipc'
+import { assetPattern } from '../sop/model'
 import { clamp,validateEdits,type Mark,type Rect,type RecordingOptions,type RecordingSource,type RecordingState,type VideoProject,type VideoSettings } from './model'
 const exec=promisify(execFile)
 export class VideoController {
@@ -19,11 +22,13 @@ export class VideoController {
   private quitting=false
   private closeDone?:()=>void
   private checkingSource=false
-  constructor(private load:(w:BrowserWindow,route:string)=>Promise<void>,private theme:()=>string){
+  constructor(private load:(w:BrowserWindow,route:string)=>Promise<void>,private theme:()=>string, ai:AIContext=()=>{throw Error('请先在拓 Ta 主窗口的设置中配置视觉 AI 服务。')}){
     this.bin=app.isPackaged?path.join(process.resourcesPath,'video'):path.resolve(__dirname,'../../resources/video')
     this.store=new VideoStore(path.join(app.getPath('userData'),'video'),path.join(app.getPath('videos'),'拓 Ta'))
     this.exporter=new VideoExporter(this.bin,this.store,p=>this.window?.webContents.send('video:export-progress',p))
     this.recovery=this.recover()
+    const sop=new SopService(this.store,this.bin,ai,p=>this.window?.webContents.send('sop:progress',p))
+    installSop(sop,e=>this.editor(e),()=>this.window)
     this.install();this.registerHotkeys()
     powerMonitor.on('lock-screen',()=>{void this.pause(true,'屏幕已锁定，录制已暂停。')});powerMonitor.on('suspend',()=>{void this.pause(true,'电脑休眠，录制已暂停。')})
     screen.on('display-removed',()=>{void this.pause(true,'显示器已断开，请检查录制范围。')})
@@ -36,7 +41,7 @@ export class VideoController {
   private send(){const state={...this.state,elapsed:this.elapsed(),marks:this.project?.marks};for(const w of [this.window,this.hud,this.ink])if(w&&!w.isDestroyed())w.webContents.send('video:state',state)}
   private elapsed(){return this.accumulated+(this.state.phase==='recording'?Date.now()-this.started:0)}
   private createWindow(route:string,options:Electron.BrowserWindowConstructorOptions){const w=new BrowserWindow({...options,webPreferences:{preload:path.resolve(__dirname,'../preload.js'),contextIsolation:true,nodeIntegration:false,sandbox:true,backgroundThrottling:false}});void this.load(w,route);return w}
-  async open(){if(this.window&&!this.window.isDestroyed()){this.window.show();this.window.focus();return}this.window=this.createWindow('video',{width:1240,height:860,minWidth:940,minHeight:660,title:'拓 Ta · 录屏与剪辑',backgroundColor:this.theme()==='light'?'#F6F3EC':'#090C0F'});this.window.on('close',e=>{e.preventDefault();this.window?.webContents.send('video:closing')});this.window.on('closed',()=>{this.window=undefined})}
+  async open(){if(this.window&&!this.window.isDestroyed()){this.window.show();this.window.focus();return}this.window=this.createWindow('video',{width:1240,height:860,minWidth:940,minHeight:660,title:'拓 Ta · 录屏与 SOP',backgroundColor:this.theme()==='light'?'#F6F3EC':'#090C0F'});this.window.on('close',e=>{e.preventDefault();this.window?.webContents.send('video:closing')});this.window.on('closed',()=>{this.window=undefined})}
   releaseHotkeys(){for(const k of this.registered)globalShortcut.unregister(k);this.registered=[]}
   registerHotkeys(){this.releaseHotkeys();const s=this.store.settings;const report=(e:unknown)=>{this.state.message=e instanceof Error?e.message:String(e);this.send()};const handlers=[()=>void this.open().catch(report),()=>void this.pause(this.state.phase!=='paused').catch(report),()=>void this.stop().catch(report),()=>this.toggleInk()];return [s.startKey,s.pauseKey,s.stopKey,s.annotateKey].map((k,i)=>{if(!k)return true;try{const ok=globalShortcut.register(k,handlers[i]);if(ok)this.registered.push(k);return ok}catch{return false}})}
   private async getSources(){
@@ -112,6 +117,6 @@ export class VideoController {
     handle('folder',(e,id)=>{this.editor(e);return shell.openPath(id?this.store.directory(id):this.store.settings.root)})
     handle('export',async(e,id,height)=>{this.editor(e);if(![720,1080,2160,99999].includes(height))throw Error('输出尺寸无效。');const p=this.store.get(id);const r=await dialog.showSaveDialog(this.window!,{title:'导出视频',defaultPath:`${p.title.replace(/[<>:"/\\|?*]/g,'-')}-${Date.now()}.mp4`,filters:[{name:'MP4 视频',extensions:['mp4']}]});if(r.canceled||!r.filePath)return;if(fs.existsSync(r.filePath))throw Error('该文件已经存在，请使用新名称以保留旧成片。');return this.exporter.export(p,r.filePath,height)})
     handle('cancel-export',()=>this.exporter.cancel())
-    protocol.handle('ta-video',async request=>{try{const u=new URL(request.url),[id,name]=u.pathname.split('/').filter(Boolean);if(u.hostname!=='media')return new Response(null,{status:404});const file=this.store.file(id,name);return await net.fetch(pathToFileURL(file).toString(),{headers:request.headers})}catch{return new Response(null,{status:404})}})
+    protocol.handle('ta-video',async request=>{try{const u=new URL(request.url),[id,name]=u.pathname.split('/').filter(Boolean);if(u.hostname!=='media')return new Response(null,{status:404});const file=assetPattern.test(name)?path.join(this.store.directory(id),name):this.store.file(id,name);return await net.fetch(pathToFileURL(file).toString(),{headers:request.headers})}catch{return new Response(null,{status:404})}})
   }
 }

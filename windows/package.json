@@ -1,6 +1,6 @@
 {
   "name": "ta-windows",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "private": true,
   "description": "拓（Ta）AI 原生截图工具 Windows 客户端",
   "author": "Ta contributors",
@@ -23,11 +23,13 @@
     "build:video": "node scripts/build-video-native.cjs",
     "prepare:video": "node scripts/prepare-video.cjs",
     "smoke:video": "node scripts/run-video-check.cjs video-capture-probe.cjs && node scripts/run-video-check.cjs video-ui-smoke.cjs",
-    "verify:video-assets": "node scripts/verify-video-assets.cjs"
+    "verify:video-assets": "node scripts/verify-video-assets.cjs",
+    "smoke:sop": "node scripts/run-video-check.cjs sop-ui-smoke.cjs"
   },
   "dependencies": {
     "@tesseract.js-data/chi_sim": "1.0.0",
     "@tesseract.js-data/eng": "1.0.0",
+    "docx": "9.5.1",
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "sharp": "0.35.4",
@@ -59,7 +61,9 @@
     "files": [
       "dist/**/*",
       "dist-electron/**/*",
-      "package.json"
+      "package.json",
+      "SOP-THIRD-PARTY-NOTICES.md",
+      "electron/sop/MIMIK-LICENSE.txt"
     ],
     "asarUnpack": [
       "node_modules/sharp/**/*",

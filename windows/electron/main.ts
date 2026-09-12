@@ -2020,7 +2020,7 @@ async function bootstrap() {
     const filePath = url.hostname === 'thumbnail' ? await store.getThumbnailFile(id) : store.getHistoryFile(id)
     return filePath ? net.fetch(pathToFileURL(filePath).toString()) : new Response('Not found', { status: 404 })
   })
-  videoController = new VideoController(loadRoute, () => store.getSettings().theme)
+  videoController = new VideoController(loadRoute, () => store.getSettings().theme, () => store.getActiveProvider())
   const rebuildTray = createTray()
   installIpcHandlers(rebuildTray)
   const hotkeyStatus = registerHotkeys(store.getSettings())

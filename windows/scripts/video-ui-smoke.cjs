@@ -39,6 +39,8 @@ app.whenReady().then(async()=>{
   await hud.webContents.executeJavaScript(`window.taVideo.mark(${JSON.stringify(mark)})`)
   await hud.webContents.executeJavaScript('window.taVideo.pause(true)');await wait(350);await hud.webContents.executeJavaScript('window.taVideo.pause(false)');await wait(1800)
   await win.webContents.executeJavaScript('window.taVideo.stop()');bg.destroy();bg=undefined
+  await until(()=>win.webContents.executeJavaScript('Boolean(document.querySelector(".sop-workspace"))'))
+  await win.webContents.executeJavaScript('[...document.querySelectorAll("button")].find(b=>b.textContent==="视频剪辑").click()')
   await until(()=>win.webContents.executeJavaScript('Boolean(document.querySelector(".video-editor"))'))
   await until(()=>win.webContents.executeJavaScript('document.querySelector("video")?.readyState>=2'))
   const projects=await win.webContents.executeJavaScript('window.taVideo.list()'),p=projects[0]

@@ -2,6 +2,23 @@ import { contextBridge, ipcRenderer } from 'electron'
 
 type Listener = (...args: any[]) => void
 
+contextBridge.exposeInMainWorld('taSop', {
+  get:(id:string)=>ipcRenderer.invoke('sop:get',id),
+  save:(d:unknown)=>ipcRenderer.invoke('sop:save',d),
+  generate:(id:string)=>ipcRenderer.invoke('sop:generate',id),
+  chat:(id:string,prompt:string,selected:string|undefined,time:number)=>ipcRenderer.invoke('sop:chat',id,prompt,selected,time),
+  cancel:(id:string)=>ipcRenderer.invoke('sop:cancel',id),
+  frame:(id:string,time:number)=>ipcRenderer.invoke('sop:frame',id,time),
+  image:(id:string,paste:boolean)=>ipcRenderer.invoke('sop:image',id,paste),
+  transform:(id:string,image:unknown,mode:string,rect:unknown)=>ipcRenderer.invoke('sop:transform',id,image,mode,rect),
+  versions:(id:string)=>ipcRenderer.invoke('sop:versions',id),
+  restore:(id:string,revision:number)=>ipcRenderer.invoke('sop:restore',id,revision),
+  subtitles:(id:string)=>ipcRenderer.invoke('sop:subtitles',id),
+  transcribe:(id:string,model:string)=>ipcRenderer.invoke('sop:transcribe',id,model),
+  importVideo:()=>ipcRenderer.invoke('sop:import-video'),
+  export:(id:string,format:string)=>ipcRenderer.invoke('sop:export',id,format),
+  onProgress:(fn:Listener)=>subscribe('sop:progress',fn),
+})
 contextBridge.exposeInMainWorld('taVideo', {
   open: () => ipcRenderer.invoke('video:open'),
   closeReady: () => ipcRenderer.invoke('video:close-ready'),

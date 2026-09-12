@@ -7,6 +7,8 @@ export interface AIRequest {
   profile: ProviderProfile
   apiKey: string
   imageDataUrl?: string
+  imageDataUrls?: string[]
+  signal?: AbortSignal
   prompt: string
 }
 
@@ -60,17 +62,18 @@ function request(url: string, init: RequestInit) {
   return fetch(url, {
     ...init,
     redirect: 'error',
-    signal: AbortSignal.timeout(AI_TIMEOUT_MS),
+    signal: init.signal ? AbortSignal.any([init.signal, AbortSignal.timeout(AI_TIMEOUT_MS)]) : AbortSignal.timeout(AI_TIMEOUT_MS),
   })
 }
 
-async function requestOpenAI({ profile, apiKey, imageDataUrl, prompt }: AIRequest): Promise<string> {
+async function requestOpenAI({ profile, apiKey, imageDataUrl, imageDataUrls = [], signal, prompt }: AIRequest): Promise<string> {
   const base = normalizedBaseUrl(profile.baseUrl)
   const endpoint = base.endsWith('/chat/completions') ? base : `${base}/chat/completions`
   const content: Array<Record<string, unknown>> = [{ type: 'text', text: prompt }]
-  if (imageDataUrl) content.push({ type: 'image_url', image_url: { url: imageDataUrl, detail: 'high' } })
+  for (const url of [...(imageDataUrl ? [imageDataUrl] : []), ...imageDataUrls]) content.push({ type: 'image_url', image_url: { url, detail: 'high' } })
   const response = await request(endpoint, {
     method: 'POST',
+    signal,
     headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ model: profile.model, messages: [{ role: 'user', content }], temperature: 0.1 }),
   })
@@ -82,15 +85,16 @@ async function requestOpenAI({ profile, apiKey, imageDataUrl, prompt }: AIReques
   throw new Error('AI 服务没有返回可读内容。')
 }
 
-async function requestAnthropic({ profile, apiKey, imageDataUrl, prompt }: AIRequest): Promise<string> {
+async function requestAnthropic({ profile, apiKey, imageDataUrl, imageDataUrls = [], signal, prompt }: AIRequest): Promise<string> {
   const content: Array<Record<string, unknown>> = []
-  if (imageDataUrl) {
-    const image = decodeDataUrl(imageDataUrl)
+  for (const url of [...(imageDataUrl ? [imageDataUrl] : []), ...imageDataUrls]) {
+    const image = decodeDataUrl(url)
     content.push({ type: 'image', source: { type: 'base64', media_type: image.mediaType, data: image.data } })
   }
   content.push({ type: 'text', text: prompt })
   const response = await request(`${normalizedBaseUrl(profile.baseUrl)}/v1/messages`, {
     method: 'POST',
+    signal,
     headers: {
       'x-api-key': apiKey,
       'anthropic-version': '2023-06-01',
@@ -105,15 +109,16 @@ async function requestAnthropic({ profile, apiKey, imageDataUrl, prompt }: AIReq
   return text
 }
 
-async function requestGemini({ profile, apiKey, imageDataUrl, prompt }: AIRequest): Promise<string> {
+async function requestGemini({ profile, apiKey, imageDataUrl, imageDataUrls = [], signal, prompt }: AIRequest): Promise<string> {
   const parts: Array<Record<string, unknown>> = [{ text: prompt }]
-  if (imageDataUrl) {
-    const image = decodeDataUrl(imageDataUrl)
+  for (const url of [...(imageDataUrl ? [imageDataUrl] : []), ...imageDataUrls]) {
+    const image = decodeDataUrl(url)
     parts.push({ inlineData: { mimeType: image.mediaType, data: image.data } })
   }
   const url = `${normalizedBaseUrl(profile.baseUrl)}/models/${encodeURIComponent(profile.model)}:generateContent?key=${encodeURIComponent(apiKey)}`
   const response = await request(url, {
     method: 'POST',
+    signal,
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ contents: [{ role: 'user', parts }], generationConfig: { temperature: 0.1 } }),
   })
