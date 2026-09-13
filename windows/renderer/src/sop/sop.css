@@ -4,3 +4,7 @@
 @media(prefers-reduced-motion:reduce){.sop-document{scroll-behavior:auto}}
 .video-header nav[hidden]{display:none}
 .sop-workspace .sop-description,.sop-workspace .sop-body{field-sizing:content;height:auto;min-height:44px;resize:none}.sop-workspace .sop-step-notes textarea{field-sizing:content;height:auto;resize:none}.sop-step{padding-top:20px}.sop-document-heading{padding-bottom:20px}.sop-workspace textarea:disabled{opacity:.75}.sop-toolbar .sop-doc-label{overflow:hidden}.sop-doc-label span{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+
+.sop-toolbar{flex-wrap:wrap}.sop-timeline{width:100%;accent-color:var(--va);margin:12px 0;cursor:pointer}.sop-playback{display:flex;align-items:center;gap:12px;margin-top:12px}.sop-playback span{font:11px Consolas,monospace;color:var(--vm)}.sop-step-links b{min-width:0;overflow-wrap:anywhere}.sop-step-links{overflow-x:hidden}
+
+.sop-feishu-settings{margin-top:24px;border-top:1px solid var(--vl);padding-top:16px}.sop-feishu-settings h2{font-size:18px}.sop-feishu-settings fieldset{border:0;padding:0;min-width:0}.sop-feishu-settings label{display:flex;gap:12px;margin:16px 0;flex-wrap:wrap}.sop-feishu-settings input{flex:1;min-width:180px}.sop-feishu-settings p,.sop-feishu-settings small{font-size:12px;color:var(--vm);line-height:1.8}.sop-feishu-settings .sop-actions{margin:16px 0}.sop-feishu-settings code{font-size:12px;overflow-wrap:anywhere}.sop-receipt{display:flex;align-items:center;gap:12px;padding:12px 20px;background:var(--vhigh);font-size:12px;flex-wrap:wrap}.sop-receipt span{flex:1}

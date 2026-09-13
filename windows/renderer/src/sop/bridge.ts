@@ -1,7 +1,9 @@
+import type { FeishuSettings, FeishuReceipt } from '../../../electron/sop/feishu'
 import type { SopDocument, SopImage, SopProgress, SopVersion } from '../../../electron/sop/model'
 import type { VideoProject } from '../../../electron/video/model'
 export type * from '../../../electron/sop/model'
 declare global { interface Window { taSop: {
+  feishuReceipt(id:string):Promise<FeishuReceipt|undefined>;feishuSettings():Promise<FeishuSettings>;feishuSave(value:FeishuSettings):Promise<FeishuSettings>;feishuStatus(value:FeishuSettings):Promise<{message:string;userName:string}>;feishuChoose():Promise<string|undefined>;feishuPublish(id:string):Promise<FeishuReceipt>;feishuOpen(url:string):Promise<void>;
   get(id:string):Promise<SopDocument>; save(d:SopDocument):Promise<SopDocument>;
   generate(id:string):Promise<SopDocument>;chat(id:string,prompt:string,selected:string|undefined,time:number):Promise<SopDocument>;
   cancel(id:string):Promise<void>;frame(id:string,time:number):Promise<SopImage>;

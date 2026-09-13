@@ -3,6 +3,13 @@ import { contextBridge, ipcRenderer } from 'electron'
 type Listener = (...args: any[]) => void
 
 contextBridge.exposeInMainWorld('taSop', {
+  feishuReceipt:(id:string)=>ipcRenderer.invoke('sop:feishu-receipt',id),
+  feishuSettings:()=>ipcRenderer.invoke('sop:feishu-settings'),
+  feishuSave:(value:unknown)=>ipcRenderer.invoke('sop:feishu-save',value),
+  feishuStatus:(value:unknown)=>ipcRenderer.invoke('sop:feishu-status',value),
+  feishuChoose:()=>ipcRenderer.invoke('sop:feishu-choose'),
+  feishuPublish:(id:string)=>ipcRenderer.invoke('sop:feishu-publish',id),
+  feishuOpen:(url:string)=>ipcRenderer.invoke('sop:feishu-open',url),
   get:(id:string)=>ipcRenderer.invoke('sop:get',id),
   save:(d:unknown)=>ipcRenderer.invoke('sop:save',d),
   generate:(id:string)=>ipcRenderer.invoke('sop:generate',id),

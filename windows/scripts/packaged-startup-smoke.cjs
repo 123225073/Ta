@@ -6,4 +6,4 @@ const child=spawn(path.resolve(__dirname,'../release/win-unpacked/拓 Ta.exe'),[
 child.stdout.on('data',d=>log+=d);child.stderr.on('data',d=>log+=d)
 const timer=setTimeout(()=>{child.kill();console.error('Startup timeout');process.exitCode=1},30000)
 child.on('error',e=>{clearTimeout(timer);console.error(e);process.exitCode=1})
-child.on('exit',()=>{clearTimeout(timer);fs.writeFileSync(path.join(out,'log.txt'),log);try{const r=JSON.parse(fs.readFileSync(marker,'utf8'));if(!r.ready||!r.packaged||r.version!=='1.5.0'||Object.values(r.hotkeyStatus).some(v=>v!==true))throw Error('Startup validation failed');console.log(JSON.stringify({...r,output:out}))}catch(e){console.error(e);process.exitCode=1}})
+child.on('exit',()=>{clearTimeout(timer);fs.writeFileSync(path.join(out,'log.txt'),log);try{const r=JSON.parse(fs.readFileSync(marker,'utf8'));if(!r.ready||!r.packaged||r.version!=='1.6.0'||Object.values(r.hotkeyStatus).some(v=>v!==true))throw Error('Startup validation failed');console.log(JSON.stringify({...r,output:out}))}catch(e){console.error(e);process.exitCode=1}})

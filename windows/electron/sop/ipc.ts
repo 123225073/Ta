@@ -1,4 +1,5 @@
-import { BrowserWindow, clipboard, dialog, ipcMain, type IpcMainInvokeEvent } from 'electron'
+import { FeishuService } from './feishu'
+import { app, shell, BrowserWindow, clipboard, dialog, ipcMain, type IpcMainInvokeEvent } from 'electron'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
@@ -10,6 +11,14 @@ import { containFit } from './export-utils'
 
 export function installSop(service:SopService, editor:(e:IpcMainInvokeEvent)=>void, window:()=>BrowserWindow|undefined) {
   const handle=(name:string,fn:(...args:any[])=>unknown)=>ipcMain.handle('sop:'+name,(e,...args)=>{editor(e);return fn(...args)})
+  const feishu=new FeishuService(app.getPath('userData'))
+  handle('feishu-receipt',id=>{service.get(id);return feishu.receipt(id)})
+  handle('feishu-settings',()=>feishu.settings())
+  handle('feishu-save',value=>feishu.save(value))
+  handle('feishu-status',value=>feishu.status(value))
+  handle('feishu-choose',async()=>{const r=await dialog.showOpenDialog(window()!,{title:'选择飞书 CLI',properties:['openFile'],filters:[{name:'lark-cli.exe',extensions:['exe']}]});if(!r.canceled)return r.filePaths[0]})
+  handle('feishu-publish',id=>feishu.publish(service.get(id),file=>service.asset(id,file),message=>window()?.webContents.send('sop:progress',{projectId:id,message,current:0,total:1})))
+  handle('feishu-open',url=>{if(typeof url!=='string'||!/^https:\/\/[\w.-]+\.(feishu\.cn|larksuite\.com)\/(docx|wiki)\/[a-zA-Z0-9]+$/.test(url))throw Error('飞书链接无效。');return shell.openExternal(url)})
   handle('get',id=>service.get(id))
   handle('save',d=>service.save(d))
   handle('generate',id=>service.generate(id))
