@@ -1,5 +1,6 @@
-import { FeishuService } from './feishu'
-import { app, shell, BrowserWindow, clipboard, dialog, ipcMain, type IpcMainInvokeEvent } from 'electron'
+import { FeishuSetup } from './feishu-setup'
+import { FeishuService, runCli } from './feishu'
+import { app, net, shell, BrowserWindow, clipboard, dialog, ipcMain, type IpcMainInvokeEvent } from 'electron'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
@@ -12,6 +13,15 @@ import { containFit } from './export-utils'
 export function installSop(service:SopService, editor:(e:IpcMainInvokeEvent)=>void, window:()=>BrowserWindow|undefined) {
   const handle=(name:string,fn:(...args:any[])=>unknown)=>ipcMain.handle('sop:'+name,(e,...args)=>{editor(e);return fn(...args)})
   const feishu=new FeishuService(app.getPath('userData'))
+  const setup=new FeishuSetup(app.getPath('userData'),()=>feishu.settings(),s=>feishu.save(s),runCli,net.fetch.bind(net))
+  handle('feishu-initialize',()=>setup.initialize())
+  handle('feishu-initialize-complete',()=>setup.completeInitialize())
+  handle('feishu-open-auth',()=>shell.openExternal(setup.authUrl()))
+  handle('feishu-discover',()=>setup.discover())
+  handle('feishu-configure',()=>setup.configure())
+  handle('feishu-install',()=>setup.install())
+  handle('feishu-login',s=>setup.login(s))
+  handle('feishu-login-complete',()=>setup.completeLogin())
   handle('feishu-receipt',id=>{service.get(id);return feishu.receipt(id)})
   handle('feishu-settings',()=>feishu.settings())
   handle('feishu-save',value=>feishu.save(value))

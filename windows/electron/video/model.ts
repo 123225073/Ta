@@ -1,9 +1,11 @@
+import {validateTimeline,type Timeline,type EditAsset} from './timeline'
 export interface Rect { x: number; y: number; width: number; height: number }
 export interface Span { start: number; end: number }
 export type MarkTool = 'rect' | 'arrow' | 'pen' | 'highlight' | 'text' | 'number' | 'cover'
 export interface Mark extends Rect, Span { id: string; tool: MarkTool; color: string; stroke: number; text: string; enabled: boolean; points?: { x: number; y: number; t?: number }[] }
 export interface Zoom extends Span { id: string; scale: number; cx: number; cy: number }
 export interface VideoProject {
+  timeline?:Timeline; assets?:EditAsset[];
   schemaVersion: 1; id: string; title: string; createdAt: string; revision: number;
   width: number; height: number; duration: number; status: 'recording' | 'ready' | 'recovered';
   hasMic: boolean; hasSystem: boolean; marks: Mark[]; cuts: Span[]; mutes: Span[]; zooms: Zoom[];
@@ -73,5 +75,5 @@ export function validateEdits(value:unknown, base:VideoProject):VideoProject {
     ids.add(m.id)
   }
   if(!keepSegments(base.duration,p.cuts).length)throw Error('至少保留一段视频。')
-  return {...base,title:p.title.trim(),crop:p.crop,cuts:p.cuts,mutes:p.mutes,zooms:p.zooms,marks:p.marks,splits:p.splits??[],micVolume:p.micVolume,systemVolume:p.systemVolume,revision:base.revision+1}
+  return {...base,timeline:p.timeline?validateTimeline(p.timeline,base,base.assets??[]):undefined,title:p.title.trim(),crop:p.crop,cuts:p.cuts,mutes:p.mutes,zooms:p.zooms,marks:p.marks,splits:p.splits??[],micVolume:p.micVolume,systemVolume:p.systemVolume,revision:base.revision+1}
 }

@@ -24,6 +24,7 @@ export class VideoStore {
   saveSettings(s:VideoSettings){this.settings=s;this.atomic(path.join(this.metadata,'settings.json'),s)}
   directory(id:string){if(!/^\d{13}-[a-f0-9]{8}$/.test(id)||!Object.hasOwn(this.index,id))throw Error('录屏项目不存在。');return this.index[id]}
   file(id:string,name:string){if(!['screen.mp4','system.wav','mic.wav','project.json','thumbnail.jpg'].includes(name))throw Error('媒体类型无效。');return path.join(this.directory(id),name)}
+  media(id:string,name:string){if(/^edit-[a-f0-9]{16}\.(mp4|wav)$/.test(name)&&this.get(id).assets?.some(a=>a.file===name))return path.join(this.directory(id),name);return this.file(id,name)}
   create(width:number,height:number,hasMic:boolean,hasSystem:boolean){
     const id=Date.now()+'-'+crypto.randomBytes(4).toString('hex'), date=new Date()
     const dir=path.join(this.settings.root,String(date.getFullYear()),String(date.getMonth()+1).padStart(2,'0'),String(date.getDate()).padStart(2,'0'),id)

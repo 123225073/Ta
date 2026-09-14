@@ -4,6 +4,14 @@ type Listener = (...args: any[]) => void
 
 contextBridge.exposeInMainWorld('taSop', {
   feishuReceipt:(id:string)=>ipcRenderer.invoke('sop:feishu-receipt',id),
+  feishuInitialize:()=>ipcRenderer.invoke('sop:feishu-initialize'),
+  feishuInitializeComplete:()=>ipcRenderer.invoke('sop:feishu-initialize-complete'),
+  feishuOpenAuth:()=>ipcRenderer.invoke('sop:feishu-open-auth'),
+  feishuDiscover:()=>ipcRenderer.invoke('sop:feishu-discover'),
+  feishuConfigure:()=>ipcRenderer.invoke('sop:feishu-configure'),
+  feishuInstall:()=>ipcRenderer.invoke('sop:feishu-install'),
+  feishuLogin:(s:unknown)=>ipcRenderer.invoke('sop:feishu-login',s),
+  feishuLoginComplete:()=>ipcRenderer.invoke('sop:feishu-login-complete'),
   feishuSettings:()=>ipcRenderer.invoke('sop:feishu-settings'),
   feishuSave:(value:unknown)=>ipcRenderer.invoke('sop:feishu-save',value),
   feishuStatus:(value:unknown)=>ipcRenderer.invoke('sop:feishu-status',value),
@@ -27,6 +35,7 @@ contextBridge.exposeInMainWorld('taSop', {
   onProgress:(fn:Listener)=>subscribe('sop:progress',fn),
 })
 contextBridge.exposeInMainWorld('taVideo', {
+  importMedia:(id:string,kind:string)=>ipcRenderer.invoke('video:import-media',id,kind),
   open: () => ipcRenderer.invoke('video:open'),
   closeReady: () => ipcRenderer.invoke('video:close-ready'),
   onClosing: (fn: Listener) => subscribe('video:closing', fn),

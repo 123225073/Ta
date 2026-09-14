@@ -1,3 +1,4 @@
+import { importTimelineMedia } from './import-media'
 import { mediaResponse } from './media-response'
 import { app, BrowserWindow, desktopCapturer, dialog, globalShortcut, ipcMain, powerMonitor, protocol, screen, shell, type IpcMainInvokeEvent } from 'electron'
 import { spawn, execFile, type ChildProcessWithoutNullStreams } from 'node:child_process'
@@ -107,6 +108,7 @@ export class VideoController {
     handle('sources',(e)=>{this.editor(e);return this.getSources()});handle('microphones',()=>this.microphones())
     handle('list',async()=>{await this.recovery;return this.store.list()});handle('get',async(e,id)=>{this.editor(e);await this.recovery;return this.store.get(id)})
     handle('save',(e,id,edit)=>{this.editor(e);return this.store.save(id,edit)})
+    handle('import-media',async(e,id,kind)=>{this.editor(e);this.store.get(id);if(!['audio','video'].includes(kind))throw Error('素材类型无效。');const r=await dialog.showOpenDialog(this.window!,{title:kind==='video'?'添加视频素材':'添加音频素材',properties:['openFile'],filters:[{name:'音视频素材',extensions:kind==='video'?['mp4','mkv','mov','webm','avi']:['wav','mp3','m4a','aac','ogg','flac','mp4']}]});if(!r.canceled)return importTimelineMedia(this.store,this.bin,id,r.filePaths[0],kind)})
     handle('start',(e,o)=>{this.editor(e);return this.start(o)})
     handle('pause',(_e,p)=>this.pause(p===true));handle('stop',()=>this.stop());handle('ink',()=>this.toggleInk())
     handle('mark',(_e,mark:Mark)=>{const p=this.project;if(!p||this.state.phase!=='recording')return;const duration=Math.max(86400000,this.elapsed()+1);const m={...mark,start:clamp(mark.start,0,this.elapsed()),end:duration};const checked=validateEdits({...p,marks:[...p.marks,m]}, {...p,duration});p.marks=checked.marks;this.store.write(p);this.send()})
@@ -117,6 +119,6 @@ export class VideoController {
     handle('folder',(e,id)=>{this.editor(e);return shell.openPath(id?this.store.directory(id):this.store.settings.root)})
     handle('export',async(e,id,height)=>{this.editor(e);if(![720,1080,2160,99999].includes(height))throw Error('输出尺寸无效。');const p=this.store.get(id);const r=await dialog.showSaveDialog(this.window!,{title:'导出视频',defaultPath:`${p.title.replace(/[<>:"/\\|?*]/g,'-')}-${Date.now()}.mp4`,filters:[{name:'MP4 视频',extensions:['mp4']}]});if(r.canceled||!r.filePath)return;if(fs.existsSync(r.filePath))throw Error('该文件已经存在，请使用新名称以保留旧成片。');return this.exporter.export(p,r.filePath,height)})
     handle('cancel-export',()=>this.exporter.cancel())
-    protocol.handle('ta-video',async request=>{try{const u=new URL(request.url),[id,name]=u.pathname.split('/').filter(Boolean);if(u.hostname!=='media')return new Response(null,{status:404});const file=assetPattern.test(name)?path.join(this.store.directory(id),name):this.store.file(id,name);return mediaResponse(file,request)}catch{return new Response(null,{status:404})}})
+    protocol.handle('ta-video',async request=>{try{const u=new URL(request.url),[id,name]=u.pathname.split('/').filter(Boolean);if(u.hostname!=='media')return new Response(null,{status:404});const file=assetPattern.test(name)?path.join(this.store.directory(id),name):this.store.media(id,name);return mediaResponse(file,request)}catch{return new Response(null,{status:404})}})
   }
 }
