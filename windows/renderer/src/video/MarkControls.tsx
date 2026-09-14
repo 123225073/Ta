@@ -1,0 +1,22 @@
+import {useRef,useState,type PointerEvent} from 'react'
+import {clamp,markFontSize,markTextLines,markSvg,type Mark,type Rect} from '../../../electron/video/model'
+
+export function MarkControls({mark,crop,selected,editing,onSelect,onEdit,onCommit}:{mark:Mark;crop:Rect;selected:boolean;editing:boolean;onSelect:()=>void;onEdit:(v:boolean)=>void;onCommit:(m:Mark)=>void}) {
+  const host=useRef<HTMLDivElement>(null),[draft,setDraft]=useState<Mark>(),gesture=useRef<{mark:Mark;x:number;y:number;sx:number;sy:number;resize:boolean}|undefined>(undefined),pending=useRef<Mark|undefined>(undefined)
+  const m=draft??mark,size=markFontSize(m),textHeight=m.tool==='text'?markTextLines(m).length*size*1.2:size*1.2
+  const begin=(e:PointerEvent,resize=false)=>{e.stopPropagation();onSelect();const r=host.current!.getBoundingClientRect();gesture.current={mark:structuredClone(mark),x:e.clientX,y:e.clientY,sx:crop.width/r.width,sy:crop.height/r.height,resize};e.currentTarget.setPointerCapture(e.pointerId)}
+  const move=(e:PointerEvent)=>{const g=gesture.current;if(!g)return;const dx=(e.clientX-g.x)*g.sx,dy=(e.clientY-g.y)*g.sy,b=g.mark;let next:Mark
+    if(g.resize){const factor=clamp(Math.max((b.width+dx)/Math.max(1,b.width),(b.height+dy)/Math.max(1,b.height)),.1,Math.min((crop.x+crop.width-b.x)/Math.max(1,b.width),(crop.y+crop.height-b.y)/Math.max(1,b.height)));next={...b,width:b.width*factor,height:b.height*factor,...(b.tool==='text'?{fontSize:clamp(markFontSize(b)*factor,8,1000)}:{})}}
+    else next={...b,x:clamp(b.x+dx,crop.x,crop.x+crop.width-Math.max(1,b.width)),y:clamp(b.y+dy,crop.y,crop.y+crop.height-Math.max(1,b.height))}
+    pending.current=next;setDraft(next)
+  }
+  const end=()=>{if(pending.current)onCommit(pending.current);gesture.current=undefined;pending.current=undefined;setDraft(undefined)}
+  return <div ref={host} className={'timeline-mark-controls '+(draft?'is-dragging':'')}>{draft&&<svg viewBox={`${crop.x} ${crop.y} ${crop.width} ${crop.height}`} preserveAspectRatio="none" dangerouslySetInnerHTML={{__html:markSvg(draft)}}/>}<div className={'timeline-mark-box '+(selected?'selected':'')+(m.y-crop.y<crop.height*.1?' near-top':'')} style={{left:(m.x-crop.x)/crop.width*100+'%',top:(m.y-crop.y)/crop.height*100+'%',width:Math.max(m.width,size)/crop.width*100+'%',height:Math.max(m.height,textHeight)/crop.height*100+'%'}} onPointerDown={e=>begin(e)} onPointerMove={move} onPointerUp={end} onPointerCancel={end} onDoubleClick={e=>{e.stopPropagation();onSelect();if(m.tool==='text')onEdit(true)}}>
+    {selected&&!editing&&<><button className="timeline-object-move" aria-label="拖动画面标记" onPointerDown={e=>begin(e)}>✥</button><span className="timeline-object-resize" role="button" aria-label="缩放画面标记" onPointerDown={e=>begin(e,true)}/>{m.tool==='text'&&<div className="timeline-object-quick" onPointerDown={e=>e.stopPropagation()}><button onClick={()=>onEdit(true)}>编辑文字</button><button aria-label="缩小文字" onClick={()=>onCommit({...mark,fontSize:clamp(size/1.2,8,1000)})}>A−</button><button aria-label="放大文字" onClick={()=>onCommit({...mark,fontSize:clamp(size*1.2,8,1000)})}>A＋</button><input aria-label="画面文字颜色" type="color" value={mark.color} onChange={e=>onCommit({...mark,color:e.target.value})}/></div>}</>}
+  </div>{editing&&<svg className="timeline-text-edit-svg" viewBox={`${crop.x} ${crop.y} ${crop.width} ${crop.height}`} preserveAspectRatio="none"><foreignObject x={m.x} y={m.y} width={Math.max(m.width,size*2)} height={Math.max(m.height,size*2.4)}><InlineText key={mark.id} mark={mark} onDone={text=>{if(text!==undefined&&text!==mark.text)onCommit({...mark,text});onEdit(false)}}/></foreignObject></svg>}</div>
+}
+function InlineText({mark,onDone}:{mark:Mark;onDone:(text?:string)=>void}) {
+  const [text,setText]=useState(mark.text),done=useRef(false)
+  const finish=(cancel=false)=>{if(done.current)return;done.current=true;onDone(cancel?undefined:text)}
+  return <textarea ref={el=>{if(el&&!done.current){el.focus()}}} aria-label="画面文字编辑" className="timeline-inline-text" value={text} placeholder="输入文字" maxLength={500} style={{fontSize:markFontSize(mark),color:mark.color}} onChange={e=>setText(e.target.value)} onPointerDown={e=>e.stopPropagation()} onBlur={()=>finish()} onKeyDown={e=>{e.stopPropagation();if(e.nativeEvent.isComposing)return;if(e.key==='Escape'){e.preventDefault();finish(true)}else if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)){e.preventDefault();finish()}}}/>
+}

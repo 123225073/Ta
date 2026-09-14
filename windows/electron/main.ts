@@ -1,3 +1,4 @@
+import {allowEditorPermission} from './video/permissions'
 import {
   app,
   BrowserWindow,
@@ -2013,7 +2014,7 @@ async function bootstrap() {
   if (await runCpaMaintenanceMode()) return
   startWindowsCaptureHost()
   syncClipboardMonitor(store.getSettings())
-  electronSession.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false))
+  electronSession.defaultSession.setPermissionRequestHandler((contents, permission, callback) => callback(allowEditorPermission(permission, contents.id, videoController?.window?.webContents.id)))
   protocol.handle('ta-media', async (request) => {
     const url = new URL(request.url)
     const id = url.pathname.split('/').filter(Boolean).at(-1) ?? ''
