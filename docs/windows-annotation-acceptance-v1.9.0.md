@@ -30,12 +30,14 @@
 
 正式安装目录的复验发现 Windows PowerShell 5 的文件枚举顺序会先选到同产品名的卸载程序，导致 CLI 没有回执。入口已改为精确定位主程序文件名，不再依赖枚举顺序，并增加非零启动退出码提示。修正后已安装 EXE + PowerShell CLI 的完整链路通过：`windows/output/cli-process-1789359449846/result.json`，覆盖查询、预演、批量编辑、过期版本拒绝、撤销/重做、截帧和 MP4 导出。
 
-`windows/output/install-1.9.0/install-result.json`：桌面程序产品版本 `1.9.0.0`，安装后的 app.asar 与已验收构建一致，桌面快捷方式指向安装目录。安装前后的 326 个录屏、文档和配置文件 SHA256 全部相同。
+`windows/output/install-1.9.0/install-result.json`：桌面程序产品版本 `1.9.0.0`，安装后的 app.asar 与已验收构建一致，桌面快捷方式指向安装目录。最终覆盖安装前后的 328 个录屏、文档和配置文件 SHA256 全部相同。
 
-安装包为 `Ta-Windows-1.9.0-x64-Setup.exe`，最终 SHA256 记录在上述安装验收文件中。
+安装包 `Ta-Windows-1.9.0-x64-Setup.exe` 最终 SHA256：`64125D20085F013B1BF528AD957000389A8AA202205A7938F4F619C61BE5E26B`，同时记录在上述安装验收文件中。
 
 已安装程序启动及截图/素材库回归：`windows/output/packaged-video-1789359499283/result.json`，`ready`、`libraryUiVerified` 均为 true，所需录屏资源存在。
 
 额外测试软件未启动时调用实际 `.cmd schema`。发现 GUI 进程继承命令行管道会使外层管道一直等待；包装器改为 Shell 启动，避免继承调用方管道。修正后冷启动在约 2.7 秒返回可解析 JSON，CLI 退出而软件可继续驻留。
 
 最终 CLI 包装器的已安装软件全链路复验通过：`windows/output/cli-process-1789359673629/result.json`。
+
+最终覆盖安装后，CLI 脚本与源码 SHA256 一致；实际 `.cmd schema` 在 2.98 秒返回 JSON 并退出，包含全部 9 项命令。
