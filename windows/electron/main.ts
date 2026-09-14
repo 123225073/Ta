@@ -1,4 +1,5 @@
 import {allowEditorPermission} from './video/permissions'
+import {cliJobArgument,dispatchCLIJob} from './video/cli-dispatch'
 import {
   app,
   BrowserWindow,
@@ -3275,11 +3276,13 @@ async function bootstrap() {
   }
 }
 
-const singleInstance = app.requestSingleInstanceLock()
+const cliJob=cliJobArgument(process.argv)
+const runCLIJob=async(file:string)=>{await dispatchCLIJob(file,async request=>{for(let i=0;i<150&&!videoController;i++)await new Promise(resolve=>setTimeout(resolve,100));if(!videoController)throw Error('STARTUP_PENDING: retry shortly');return videoController.runCLI(request)})}
+const singleInstance = app.requestSingleInstanceLock(cliJob?{videoCLIJob:cliJob}:{})
 if (!singleInstance) app.quit()
 else {
-  app.on('second-instance', () => void showRoute('home'))
-  app.whenReady().then(bootstrap).catch((error) => {
+  app.on('second-instance', (_event,args,_cwd,data) => {const job=(data as {videoCLIJob?:string})?.videoCLIJob??cliJobArgument(args);if(job)void runCLIJob(job).catch(()=>{});else void showRoute('home')})
+  app.whenReady().then(bootstrap).then(()=>cliJob?runCLIJob(cliJob):undefined).catch((error) => {
     dialog.showErrorBox('拓 Ta 启动失败', error instanceof Error ? error.stack ?? error.message : String(error))
     app.quit()
   })

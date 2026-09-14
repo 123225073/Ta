@@ -3,7 +3,7 @@ export type * from '../../../electron/video/model'
 declare global {
   interface Window { taVideo: {
     importMedia(id:string,kind:'video'|'audio'):Promise<{project:VideoProject;asset:import('../../../electron/video/timeline').EditAsset}|undefined>;
-    open(): Promise<void>; init(): Promise<{state:RecordingState;settings:VideoSettings;theme:string}>;
+    open(): Promise<void>; init(): Promise<{state:RecordingState;settings:VideoSettings;theme:string;projectId?:string;undoProject?:VideoProject}>;
     closeReady():Promise<void>;onClosing(fn:()=>void):()=>void;
     sources():Promise<RecordingSource[]>; microphones():Promise<string[]>; list():Promise<VideoProject[]>;
     get(id:string):Promise<VideoProject>; save(id:string,p:VideoProject):Promise<VideoProject>;

@@ -15,7 +15,7 @@ describe('editor operations',()=>{
     const data=copyClips(t,'m')!;c.keys[0].scale=3;const result=pasteClips(t,data,'m2',1000,()=> 'new');expect(result.timeline.tracks[1].clips[0].keys[0].scale).toBe(2)
   })
   it('wraps text and escapes markup in the common preview/export renderer',()=>{
-    const m:Mark={id:'m',tool:'text',color:'#FFFFFF',stroke:3,text:'教程文字\n<test>',fontSize:40,enabled:true,start:0,end:1000,x:0,y:0,width:80,height:200}
+    const m:Mark={id:'m',tool:'text',color:'#FFFFFF',stroke:3,text:'教程文字\n<test>',fontSize:40,textAutoSize:false,enabled:true,start:0,end:1000,x:0,y:0,width:80,height:200}
     expect(markTextLines(m).slice(0,2)).toEqual(['教程','文字']);expect(markSvg(m)).toContain('font-size="40"');expect(markSvg(m)).not.toContain('<test>');expect(markSvg({...m,fontSize:undefined})).toContain('font-size="20"')
   })
   it('allows fullscreen only for the actual editor',()=>{expect(allowEditorPermission('fullscreen',4,4)).toBe(true);expect(allowEditorPermission('fullscreen',3,4)).toBe(false);expect(allowEditorPermission('media',4,4)).toBe(false);expect(allowEditorPermission('fullscreen',undefined,undefined)).toBe(false)})

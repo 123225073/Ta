@@ -1,4 +1,5 @@
 import { importTimelineMedia } from './import-media'
+import {VideoCLI,type CLIRequest} from './cli-engine'
 import { mediaResponse } from './media-response'
 import { app, BrowserWindow, desktopCapturer, dialog, globalShortcut, ipcMain, powerMonitor, protocol, screen, shell, type IpcMainInvokeEvent } from 'electron'
 import { spawn, execFile, type ChildProcessWithoutNullStreams } from 'node:child_process'
@@ -23,6 +24,14 @@ export class VideoController {
   private quitting=false
   private closeDone?:()=>void
   private checkingSource=false
+  private cliQueue:Promise<unknown>=Promise.resolve()
+  private cliProject?:string
+  private cliUndo?:VideoProject
+  runCLI(request:CLIRequest){const job=this.cliQueue.catch(()=>{}).then(async()=>{await this.recovery;if(this.active()||this.exporter.busy)throw Error('BUSY: recording or export in progress');const writing=['apply','undo','redo','import','export'].includes(request.command)&&!request.dryRun,previous=this.window
+    if(writing&&previous&&!previous.isDestroyed()){await new Promise<void>((resolve,reject)=>{const timer=setTimeout(()=>{previous.removeListener('closed',closed);reject(Error('BUSY: editor did not finish saving'))},15000);const closed=()=>{clearTimeout(timer);resolve()};previous.once('closed',closed);previous.webContents.send('video:closing')})}
+    if(writing)this.cliUndo=undefined
+    try{const before=writing&&request.projectId?this.store.get(request.projectId):undefined,result=await new VideoCLI(this.store,this.bin,this.exporter).execute(request);if(['apply','undo','redo'].includes(request.command)&&writing&&previous)this.cliUndo=before;return result}finally{if(writing&&previous){this.cliProject=request.projectId;await this.open()}}
+  });this.cliQueue=job;return job}
   constructor(private load:(w:BrowserWindow,route:string)=>Promise<void>,private theme:()=>string, ai:AIContext=()=>{throw Error('请先在拓 Ta 主窗口的设置中配置视觉 AI 服务。')}){
     this.bin=app.isPackaged?path.join(process.resourcesPath,'video'):path.resolve(__dirname,'../../resources/video')
     this.store=new VideoStore(path.join(app.getPath('userData'),'video'),path.join(app.getPath('videos'),'拓 Ta'))
@@ -103,7 +112,7 @@ export class VideoController {
     const handle=(name:string,fn:(e:IpcMainInvokeEvent,...args:any[])=>unknown)=>ipcMain.handle('video:'+name,(e,...args)=>{this.trusted(e);return fn(e,...args)})
     // The only host entry: existing Ta main renderer can open the video window.
     ipcMain.handle('video:open',e=>{const owner=BrowserWindow.fromWebContents(e.sender);if(!owner||e.senderFrame!==e.sender.mainFrame)throw Error('窗口无效。');return this.open()})
-    handle('init',()=>({state:{...this.state,elapsed:this.elapsed(),marks:this.project?.marks},settings:this.store.settings,theme:this.theme()}))
+    handle('init',()=>{const projectId=this.cliProject,undoProject=this.cliUndo;this.cliProject=undefined;this.cliUndo=undefined;return {state:{...this.state,elapsed:this.elapsed(),marks:this.project?.marks},settings:this.store.settings,theme:this.theme(),projectId,undoProject}})
     handle('close-ready',e=>{this.editor(e);this.window?.destroy();this.closeDone?.();this.closeDone=undefined})
     handle('sources',(e)=>{this.editor(e);return this.getSources()});handle('microphones',()=>this.microphones())
     handle('list',async()=>{await this.recovery;return this.store.list()});handle('get',async(e,id)=>{this.editor(e);await this.recovery;return this.store.get(id)})

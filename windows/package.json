@@ -1,6 +1,6 @@
 {
   "name": "ta-windows",
-  "version": "1.8.0",
+  "version": "1.9.0",
   "private": true,
   "description": "拓（Ta）AI 原生截图工具 Windows 客户端",
   "author": "Ta contributors",
@@ -83,6 +83,10 @@
       {
         "from": "resources/video",
         "to": "video"
+      },
+      {
+        "from": "resources/cli",
+        "to": "cli"
       }
     ],
     "win": {
