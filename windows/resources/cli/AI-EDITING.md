@@ -35,10 +35,14 @@
 - `clip.add`：trackId + clip，clip 的完整结构参考 inspect（id、name、asset、start、in、out、speed、volume、enabled、rect、keys）。媒体 asset 必须是项目已经注册的素材。
 - `clip.split`：clipId + time。原录制画面和关联声音一起分割。
 - `clip.speed`：clipId + speed，0.25–4 倍；关联声音同步变速。
+- `clip.trim`：clipId + side（left/right）+ time。time 是成片时间，保留速度并校验原素材边界；关联声音同步裁剪。
+- `clip.move-many`：clipIds 数组 + delta（毫秒）。整组选中片段和关联声音一起移动，保持相对时间；触及零点时整组停止。
+- `clip.delete-many`：clipIds 数组 + ripple（可选）。ripple=true 时删除选中时段并前移后续素材；若有未选中素材跨越时段，会拒绝整批操作。
+- `zoom.configure`：缩放轨道的 clipId + recipe。recipe 包含 start/end（成片毫秒）、scale（1–4）、cx/cy（0–1）、enter/exit（过渡毫秒）、ease（smooth/linear/hold）。例如 `{"start":1000,"end":5000,"scale":3,"cx":0.7,"cy":0.4,"enter":1000,"exit":1000,"ease":"linear"}`；自动生成进入、保持和退出关键帧。先通过 track.add / clip.add 创建缩放片段。
 - `clip.patch`：clipId + patch，可修改 start/in/out/volume/enabled/rect/name/keys，不能偷偷切换 asset/id/link。
 - `clip.delete`：clipId；删除编辑片段及关联声音，不删除源文件。
 - `mark.patch`：clipId + patch，可改坐标、文字、颜色、fontSize、rotation、textDirection、dimOpacity。
-- `keyframe.set`：clipId + keyframe（time、scale、cx、cy），相同时刻替换。
+- `keyframe.set`：clipId + keyframe（time、scale、cx、cy、可选 ease），相同时刻替换。ease 控制此关键帧到下一关键帧的过渡：smooth 平滑、linear 匀速、hold 保持到下一帧切换。
 - `import --project ID --revision N --kind audio --file C:\Work\voice.wav` 导入素材，返回注册后的 asset；再用 clip.add 放入轨道。导入保留原文件。
 
 撤销：`undo --project ID --revision N`；重做：`redo --project ID --revision N`。一次 apply 是一次撤销操作，保存最近 50 次 CLI 编辑。若期间用户在界面继续修改，旧 CLI 历史会拒绝覆盖新版本。

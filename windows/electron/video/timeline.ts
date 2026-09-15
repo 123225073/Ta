@@ -1,6 +1,6 @@
 import { keepSegments,validateEdits,type VideoProject,type Mark,clamp } from './model'
 export type TrackKind='video'|'audio'|'mark'|'zoom'
-export interface Keyframe {time:number;scale:number;cx:number;cy:number}
+export interface Keyframe {time:number;scale:number;cx:number;cy:number;ease?:'smooth'|'linear'|'hold'}
 export interface TimelineClip {id:string;link?:string;name:string;start:number;in:number;out:number;speed:number;asset:string;volume:number;enabled:boolean;rect:{x:number;y:number;width:number;height:number};keys:Keyframe[];mark?:Mark}
 export interface TimelineTrack {id:string;name:string;kind:TrackKind;muted:boolean;clips:TimelineClip[]}
 export interface EditAsset {file:string;name:string;kind:'video'|'audio';duration:number;width:number;height:number;audio:boolean}
@@ -14,8 +14,8 @@ export const makeClip=(id:string,name:string,asset:string,duration:number,start=
 export function keyAt(c:TimelineClip,local:number):Keyframe {
   const keys=[...c.keys].sort((a,b)=>a.time-b.time);if(!keys.length)return {time:local,scale:1,cx:.5,cy:.5}
   if(local<=keys[0].time)return {...keys[0],time:local};const right=keys.findIndex(k=>k.time>local);if(right<0)return {...keys.at(-1)!,time:local}
-  const a=keys[right-1],b=keys[right],u=(local-a.time)/(b.time-a.time),f=u*u*(3-2*u)
-  return {time:local,scale:a.scale+(b.scale-a.scale)*f,cx:a.cx+(b.cx-a.cx)*f,cy:a.cy+(b.cy-a.cy)*f}
+  const a=keys[right-1],b=keys[right],u=(local-a.time)/(b.time-a.time),f=a.ease==='hold'?0:a.ease==='linear'?u:u*u*(3-2*u)
+  return {time:local,scale:a.scale+(b.scale-a.scale)*f,cx:a.cx+(b.cx-a.cx)*f,cy:a.cy+(b.cy-a.cy)*f,...(a.ease?{ease:a.ease}:{})}
 }
 export function splitClip(c:TimelineClip,time:number,newId:string):[TimelineClip,TimelineClip] {
   const local=time-c.start;if(local<34||clipDuration(c)-local<34)throw Error('请在片段内部选择分割位置。')
@@ -65,7 +65,7 @@ export function validateTimeline(t:Timeline,p:VideoProject,assets:EditAsset[]):T
     if(!c.rect||!num(c.rect.x,0,1)||!num(c.rect.y,0,1)||!num(c.rect.width,.02,1)||!num(c.rect.height,.02,1))throw Error('画面位置无效。')
     // Millisecond timestamps may contain repeating fractions at 30 fps. Permit
     // sub-microsecond rounding at the end, then normalize the persisted copy.
-    let previous=-1;for(const k of [...c.keys].sort((a,b)=>a.time-b.time)){if(!num(k.time,0,clipDuration(c)+.000001)||k.time===previous||!num(k.scale,1,4)||!num(k.cx,0,1)||!num(k.cy,0,1))throw Error('关键帧参数无效。');previous=k.time}
+    let previous=-1;for(const k of [...c.keys].sort((a,b)=>a.time-b.time)){if(k.ease!==undefined&&!["smooth","linear","hold"].includes(k.ease)||!num(k.time,0,clipDuration(c)+.000001)||k.time===previous||!num(k.scale,1,4)||!num(k.cx,0,1)||!num(k.cy,0,1))throw Error('关键帧参数无效。');previous=k.time}
     if(c.link!==undefined&&(typeof c.link!=='string'||c.link.length>100))throw Error('片段关联无效。')
     if(track.kind==='mark'){if(!c.mark)throw Error('标记内容缺失。');validateEdits({...p,timeline:undefined,marks:[c.mark]}, {...p,timeline:undefined})}ids.add(c.id)
   }}

@@ -2,6 +2,7 @@ import type { ExportProgress, Mark, RecordingOptions, RecordingSource, Recording
 export type * from '../../../electron/video/model'
 declare global {
   interface Window { taVideo: {
+    waveform(id:string,asset:string):Promise<import('../../../electron/video/waveform').Waveform>;
     importMedia(id:string,kind:'video'|'audio'):Promise<{project:VideoProject;asset:import('../../../electron/video/timeline').EditAsset}|undefined>;
     open(): Promise<void>; init(): Promise<{state:RecordingState;settings:VideoSettings;theme:string;projectId?:string;undoProject?:VideoProject}>;
     closeReady():Promise<void>;onClosing(fn:()=>void):()=>void;

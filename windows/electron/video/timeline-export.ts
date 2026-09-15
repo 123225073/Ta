@@ -6,11 +6,11 @@ import {markSvg,type VideoProject} from './model'
 export type RenderRun=(args:string[],progress?:(time:number)=>void)=>Promise<string>
 function keyExpression(c:TimelineClip,field:'scale'|'cx'|'cy',offset=0){
   const keys=[...c.keys].sort((a,b)=>a.time-b.time);if(!keys.length)return String(field==='scale'?1:.5)
-  let expression=String(keys.at(-1)![field]);for(let i=keys.length-2;i>=0;i--){const a=keys[i],b=keys[i+1],u=`clip((on/30-${(offset+a.time)/1000})/${(b.time-a.time)/1000},0,1)`,f=`(${u}*${u}*(3-2*${u}))`;expression=`if(lt(on/30,${(offset+b.time)/1000}),${a[field]}+(${b[field]-a[field]})*${f},${expression})`}
+  let expression=String(keys.at(-1)![field]);for(let i=keys.length-2;i>=0;i--){const a=keys[i],b=keys[i+1],u=`clip((on/30-${(offset+a.time)/1000})/${(b.time-a.time)/1000},0,1)`,f=a.ease==='hold'?'0':a.ease==='linear'?u:`(${u}*${u}*(3-2*${u}))`;expression=`if(lt(on/30,${(offset+b.time)/1000}),${a[field]}+(${b[field]-a[field]})*${f},${expression})`}
   return `if(lt(on/30,${(offset+keys[0].time)/1000}),${keys[0][field]},${expression})`
 }
 export function cameraExpressions(t:Timeline){const result={scale:'1',cx:'.5',cy:'.5'};for(const track of t.tracks.filter(t=>t.kind==='zoom'&&!t.muted))for(const c of track.clips.filter(c=>c.enabled))for(const field of ['scale','cx','cy'] as const)result[field]=`if(between(on/30,${c.start/1000},${(clipEnd(c)-.001)/1000}),${keyExpression(c,field,c.start)},${result[field]})`;return result}
-const zoomFilter=(e:{scale:string;cx:string;cy:string},w:number,h:number)=>`zoompan=z='${e.scale}':x='max(0,min(iw-iw/zoom,iw*(${e.cx})-iw/zoom/2))':y='max(0,min(ih-ih/zoom,ih*(${e.cy})-ih/zoom/2))':d=1:s=${w}x${h}:fps=30`
+export const zoomFilter=(e:{scale:string;cx:string;cy:string},w:number,h:number)=>`zoompan=z='${e.scale}':x='max(0,min(iw-iw/zoom,iw*(${e.cx})-iw/zoom/2))':y='max(0,min(ih-ih/zoom,ih*(${e.cy})-ih/zoom/2))':d=1:s=${w}x${h}:fps=30`
 const tempo=(speed:number)=>speed<.5?`atempo=0.5,atempo=${speed/.5}`:speed>2?`atempo=2,atempo=${speed/2}`:`atempo=${speed}`
 export async function renderTimeline(p:VideoProject,job:string,destination:string,height:number,asset:(file:string)=>string,run:RenderRun,canceled:()=>boolean,notify:(progress:number,message:string)=>void){
   const t=p.timeline!,duration=timelineDuration(t)/1000,factor=Math.min(1,height/p.crop.height),w=Math.max(2,Math.floor(p.crop.width*factor/2)*2),h=Math.max(2,Math.floor(p.crop.height*factor/2)*2)

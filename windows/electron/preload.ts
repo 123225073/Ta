@@ -35,6 +35,7 @@ contextBridge.exposeInMainWorld('taSop', {
   onProgress:(fn:Listener)=>subscribe('sop:progress',fn),
 })
 contextBridge.exposeInMainWorld('taVideo', {
+  waveform:(id:string,asset:string)=>ipcRenderer.invoke('video:waveform',id,asset),
   importMedia:(id:string,kind:string)=>ipcRenderer.invoke('video:import-media',id,kind),
   open: () => ipcRenderer.invoke('video:open'),
   closeReady: () => ipcRenderer.invoke('video:close-ready'),

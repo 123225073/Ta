@@ -117,6 +117,7 @@ export class VideoController {
     handle('sources',(e)=>{this.editor(e);return this.getSources()});handle('microphones',()=>this.microphones())
     handle('list',async()=>{await this.recovery;return this.store.list()});handle('get',async(e,id)=>{this.editor(e);await this.recovery;return this.store.get(id)})
     handle('save',(e,id,edit)=>{this.editor(e);return this.store.save(id,edit)})
+    handle('waveform',async(e,id,asset)=>{this.editor(e);const p=this.store.get(id),a=p.assets?.find(a=>a.file===asset);if(!((asset==='mic.wav'&&p.hasMic)||(asset==='system.wav'&&p.hasSystem)||a?.audio))throw Error('素材中没有音频。');const {audioWaveform}=await import('./waveform.js');return audioWaveform(this.bin,this.store.media(id,asset),a?.duration??p.duration)})
     handle('import-media',async(e,id,kind)=>{this.editor(e);this.store.get(id);if(!['audio','video'].includes(kind))throw Error('素材类型无效。');const r=await dialog.showOpenDialog(this.window!,{title:kind==='video'?'添加视频素材':'添加音频素材',properties:['openFile'],filters:[{name:'音视频素材',extensions:kind==='video'?['mp4','mkv','mov','webm','avi']:['wav','mp3','m4a','aac','ogg','flac','mp4']}]});if(!r.canceled)return importTimelineMedia(this.store,this.bin,id,r.filePaths[0],kind)})
     handle('start',(e,o)=>{this.editor(e);return this.start(o)})
     handle('pause',(_e,p)=>this.pause(p===true));handle('stop',()=>this.stop());handle('ink',()=>this.toggleInk())
