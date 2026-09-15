@@ -36,4 +36,11 @@ export class VideoStore {
   write(p:VideoProject){this.atomic(this.file(p.id,'project.json'),p)}
   save(id:string,edit:unknown){const base=this.get(id);if(base.status==='recording')throw Error('录制完成后才能编辑。');const p=validateEdits(edit,base);this.write(p);return p}
   list(){return Object.keys(this.index).sort().reverse().flatMap(id=>{try{return[this.get(id)]}catch{return[]}})}
+  async trash(id:string,moveToTrash:(directory:string)=>Promise<void>){
+    const dir=path.resolve(this.directory(id)),p=this.get(id);
+    if(p.status==='recording')throw Error('正在录制的项目不能删除。');
+    if(p.id!==id||path.basename(dir)!==id||fs.lstatSync(dir).isSymbolicLink()||fs.realpathSync(dir).toLowerCase()!==dir.toLowerCase())throw Error('项目目录校验失败，未删除任何文件。');
+    await moveToTrash(dir);
+    const next={...this.index};delete next[id];this.atomic(path.join(this.metadata,'index.json'),next);this.index=next;
+  }
 }

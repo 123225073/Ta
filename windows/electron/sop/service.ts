@@ -55,6 +55,7 @@ export class SopService {
     return this.save({...v,revision:this.get(id).revision},`恢复版本 ${revision}`)
   }
   cancel(id:string){this.jobs.get(id)?.abort()}
+  busy(id:string){return this.jobs.has(id)}
   duration(id:string){return this.store.get(id).duration}
   async transcribe(id:string, model:string) {return this.job(id,async signal=>{
     if(typeof model!=='string'||!model.trim()||model.length>100)throw Error('请填写语音识别模型。')

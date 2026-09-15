@@ -291,6 +291,17 @@ bool WgcSession::tryGetNextFrame(ID3D11Texture2D** outTexture, int64_t* outTimes
         return false;
     }
 
+    const auto size=frame.ContentSize();
+    if(size.Width<2||size.Height<2){frame.Close();return false;}
+    const int newWidth=roundUpToEven(size.Width),newHeight=roundUpToEven(size.Height);
+    if(newWidth!=width_||newHeight!=height_) {
+        frame.Close();
+        if(currentFrame_){currentFrame_.Close();currentFrame_=nullptr;}
+        width_=newWidth;height_=newHeight;
+        framePool_.Recreate(winrtDevice_,wgdx::DirectXPixelFormat::B8G8R8A8UIntNormalized,2,{width_,height_});
+        return false;
+    }
+    contentWidth_=size.Width;contentHeight_=size.Height;
     auto surface = frame.Surface();
     auto access = surface.as<::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
     Microsoft::WRL::ComPtr<ID3D11Texture2D> texture;
@@ -298,6 +309,8 @@ bool WgcSession::tryGetNextFrame(ID3D11Texture2D** outTexture, int64_t* outTimes
     if (FAILED(hr) || !texture) {
         return false;
     }
+    D3D11_TEXTURE2D_DESC desc{};texture->GetDesc(&desc);
+    if(desc.Width<static_cast<UINT>(contentWidth_)||desc.Height<static_cast<UINT>(contentHeight_)){frame.Close();return false;}
 
     // Closing the previous frame here (rather than right after this class
     // copied out of it) returns it to the pool only once the caller has had a

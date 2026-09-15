@@ -94,3 +94,5 @@ fs.writeFileSync(path.resolve(__dirname, '../native/openscreen-wgc/src/main.cpp'
 let wgc = execFileSync('git', ['-C', upstream, 'show', `${ref}:electron/native/wgc-capture/src/wgc_session.cpp`], { encoding: 'utf8' })
 wgc = wgc.replace(/\w+\.IsBorderRequired\(false\);/g, '// Ta: the Windows 19041 SDK lacks this optional API; keep the OS capture indicator.')
 fs.writeFileSync(path.resolve(__dirname, '../native/openscreen-wgc/src/wgc_session.cpp'), wgc)
+
+require('./adapt-window-resize.cjs')

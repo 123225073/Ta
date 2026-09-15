@@ -78,6 +78,8 @@ public:
 
     int captureWidth() const;
     int captureHeight() const;
+    int contentWidth() const { return contentWidth_; }
+    int contentHeight() const { return contentHeight_; }
     ID3D11Device* device() const;
     ID3D11DeviceContext* context() const;
 
@@ -112,6 +114,7 @@ private:
     int width_ = 0;
     int height_ = 0;
     int fps_ = 60;
+    int contentWidth_=0,contentHeight_=0;
     bool captureCursor_ = false;
     bool started_ = false;
 };

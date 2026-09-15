@@ -24,10 +24,13 @@ export class VideoController {
   private quitting=false
   private closeDone?:()=>void
   private checkingSource=false
+  private pauseAlert=false
+  private deleting=false
+  private sop:SopService
   private cliQueue:Promise<unknown>=Promise.resolve()
   private cliProject?:string
   private cliUndo?:VideoProject
-  runCLI(request:CLIRequest){const job=this.cliQueue.catch(()=>{}).then(async()=>{await this.recovery;if(this.active()||this.exporter.busy)throw Error('BUSY: recording or export in progress');const writing=['apply','undo','redo','import','export'].includes(request.command)&&!request.dryRun,previous=this.window
+  runCLI(request:CLIRequest){const job=this.cliQueue.catch(()=>{}).then(async()=>{await this.recovery;if(this.deleting||this.active()||this.exporter.busy)throw Error('BUSY: recording or export in progress');const writing=['apply','undo','redo','import','export'].includes(request.command)&&!request.dryRun,previous=this.window
     if(writing&&previous&&!previous.isDestroyed()){await new Promise<void>((resolve,reject)=>{const timer=setTimeout(()=>{previous.removeListener('closed',closed);reject(Error('BUSY: editor did not finish saving'))},15000);const closed=()=>{clearTimeout(timer);resolve()};previous.once('closed',closed);previous.webContents.send('video:closing')})}
     if(writing)this.cliUndo=undefined
     try{const before=writing&&request.projectId?this.store.get(request.projectId):undefined,result=await new VideoCLI(this.store,this.bin,this.exporter).execute(request);if(['apply','undo','redo'].includes(request.command)&&writing&&previous)this.cliUndo=before;return result}finally{if(writing&&previous){this.cliProject=request.projectId;await this.open()}}
@@ -37,7 +40,7 @@ export class VideoController {
     this.store=new VideoStore(path.join(app.getPath('userData'),'video'),path.join(app.getPath('videos'),'拓 Ta'))
     this.exporter=new VideoExporter(this.bin,this.store,p=>this.window?.webContents.send('video:export-progress',p))
     this.recovery=this.recover()
-    const sop=new SopService(this.store,this.bin,ai,p=>this.window?.webContents.send('sop:progress',p))
+    const sop=this.sop=new SopService(this.store,this.bin,ai,p=>this.window?.webContents.send('sop:progress',p))
     installSop(sop,e=>this.editor(e),()=>this.window)
     this.install();this.registerHotkeys()
     powerMonitor.on('lock-screen',()=>{void this.pause(true,'屏幕已锁定，录制已暂停。')});powerMonitor.on('suspend',()=>{void this.pause(true,'电脑休眠，录制已暂停。')})
@@ -62,9 +65,9 @@ export class VideoController {
   }
   private async microphones(){try{return JSON.parse((await exec(path.join(this.bin,'ta-recorder.exe'),['--list-mics'],{windowsHide:true,timeout:10000})).stdout) as string[]}catch{return[]}}
   private async windowInfo(id:string){const h=id.split(':')[1];if(!/^\d+$/.test(h))throw Error('窗口标识无效。');return JSON.parse((await exec(path.join(this.bin,'ta-recorder.exe'),['--window-info',h],{windowsHide:true,timeout:5000})).stdout) as Rect&{minimized:boolean}}
-  private async checkSource(){if(this.checkingSource||this.currentSource?.kind!=='window'||this.state.phase!=='recording')return;this.checkingSource=true;try{const r=await this.windowInfo(this.currentSource.id);if(r.minimized){await this.pause(true,'窗口已最小化，录制已暂停。');return}if(this.project&&(Math.abs(r.width-this.project.width)>2||Math.abs(r.height-this.project.height)>2)){await this.pause(true,'窗口尺寸已改变，请恢复原大小后继续。');return}const bounds=screen.screenToDipRect(null,r);this.ink?.setBounds(bounds);this.state.bounds=bounds}catch{await this.pause(true,'录制窗口已关闭，请停止并保存已录片段。')}finally{this.checkingSource=false}}
+  private async checkSource(){if(this.checkingSource||this.currentSource?.kind!=='window'||this.state.phase!=='recording')return;this.checkingSource=true;try{const r=await this.windowInfo(this.currentSource.id);if(r.minimized){await this.pause(true,'窗口已最小化，录制已暂停。');return}const bounds=screen.screenToDipRect(null,r);this.ink?.setBounds(bounds);this.state.bounds=bounds}catch{await this.pause(true,'录制窗口已关闭，请停止并保存已录片段。')}finally{this.checkingSource=false}}
   async start(options:RecordingOptions){
-    if(this.active())throw Error('已有录制正在进行。')
+    if(this.deleting)throw Error('正在删除项目，请稍后录制。');if(this.active())throw Error('已有录制正在进行。')
     if(!fs.existsSync(path.join(this.bin,'ta-recorder.exe'))||!fs.existsSync(path.join(this.bin,'ffprobe.exe')))throw Error('录屏组件尚未准备好，请完成视频组件构建。')
     const source=this.sources.find(s=>s.id===options.sourceId);if(!source)throw Error('请重新选择录制范围。')
     if(typeof options.mic!=='boolean'||typeof options.system!=='boolean'||typeof options.micName!=='string'||options.micName.length>300)throw Error('录音设置无效。')
@@ -92,13 +95,22 @@ export class VideoController {
       child.once('close',code=>{clearTimeout(timer);if(this.state.phase==='starting')reject(Error('录制启动失败：'+this.errorLog.slice(-500)))})
       child.stdout.on('data',d=>{buffer+=d;const lines=buffer.split('\n');buffer=lines.pop()??'';for(const line of lines){if(!line.startsWith('{'))continue;let msg;try{msg=JSON.parse(line)}catch{continue}
         if(msg.event==='ta-size'){p.width=msg.width;p.height=msg.height;p.crop={x:0,y:0,width:p.width,height:p.height};this.state.width=p.width;this.state.height=p.height;this.store.write(p)}
-        if(msg.event==='source-unavailable'){void this.pause(true,'录制源尺寸变化，请恢复窗口后继续。')}
+        if(msg.event==='source-unavailable'){void this.pause(true,'无法继续捕获录制画面，录制已暂停。请恢复窗口后重试，或停止保存已录内容。')}
         if(msg.event==='recording-started'){clearTimeout(timer);this.state.phase='recording';this.started=Date.now();this.send();this.tick=setInterval(()=>{void this.checkSource();this.send();p.duration=Math.max(1,this.elapsed());try{this.store.write(p)}catch{this.state.message='保存编辑记录失败，正在停止录制并保留原片。';void this.stop();return}try{const s=fs.statfsSync(this.store.directory(p.id));if(s.bavail*s.bsize<512*1024*1024)void this.stop()}catch{}},1000);resolve()}
       }})
     })
     return p.id
   }
-  async pause(paused:boolean,message?:string){if(!['paused','recording'].includes(this.state.phase))return;if(paused&&this.state.phase==='recording'){this.accumulated=this.elapsed();this.state.phase='paused';this.child?.stdin.write('pause\n')}else if(!paused&&this.state.phase==='paused'){if(this.currentSource?.kind==='window'&&(await this.windowInfo(this.currentSource.id)).minimized)throw Error('请先恢复录制窗口。');this.started=Date.now();this.state.phase='recording';this.child?.stdin.write('resume\n')}this.state.message=message;this.send()}
+  async pause(paused:boolean,message?:string){if(!['paused','recording'].includes(this.state.phase))return;if(paused&&this.state.phase==='recording'){this.accumulated=this.elapsed();this.state.phase='paused';this.child?.stdin.write('pause\n')}else if(!paused&&this.state.phase==='paused'){if(this.currentSource?.kind==='window'&&(await this.windowInfo(this.currentSource.id)).minimized)throw Error('请先恢复录制窗口。');this.started=Date.now();this.state.phase='recording';this.child?.stdin.write('resume\n')}this.state.message=message;this.send();if(paused&&message)void this.warnPaused(message)}
+  private async warnPaused(message:string){
+    if(this.pauseAlert)return;this.pauseAlert=true;
+    try{const owner=this.hud??this.window;if(owner){owner.show();owner.focus();owner.flashFrame(true)}shell.beep();
+      const options:Electron.MessageBoxOptions={type:'warning',title:'录制已暂停',message:'录制已暂停，请注意',detail:message+'\n暂停期间不会保存新的画面或声音。已录内容仍保留。',buttons:['知道了','恢复窗口后继续','停止并保存'],defaultId:0,cancelId:0,noLink:true};
+      const result=owner?await dialog.showMessageBox(owner,options):await dialog.showMessageBox(options);
+      if(owner&&!owner.isDestroyed())owner.flashFrame(false);
+      if(this.state.phase==='paused'){if(result.response===1)await this.pause(false);if(result.response===2)await this.stop()}
+    }catch(e){this.state.message=(e as Error).message;this.send()}finally{this.pauseAlert=false}
+  }
   async stop(){if(!this.child)return;if(this.state.phase!=='stopping'){this.accumulated=this.elapsed();this.state.phase='stopping';this.child.stdin.write('stop\n');this.send()}await this.stopWait}
   private async finish(){
     if(this.tick)clearInterval(this.tick);const p=this.project;if(!p)return;this.project=undefined;this.child=undefined
@@ -116,6 +128,14 @@ export class VideoController {
     handle('close-ready',e=>{this.editor(e);this.window?.destroy();this.closeDone?.();this.closeDone=undefined})
     handle('sources',(e)=>{this.editor(e);return this.getSources()});handle('microphones',()=>this.microphones())
     handle('list',async()=>{await this.recovery;return this.store.list()});handle('get',async(e,id)=>{this.editor(e);await this.recovery;return this.store.get(id)})
+    handle('delete',async(e,id)=>{
+      this.editor(e);await this.recovery;
+      const check=()=>{if(this.active()||this.exporter.busy||this.sop.busy(id))throw Error('请等待录制、导出或 AI 处理结束后再删除。')};
+      if(this.deleting)throw Error('正在删除，请稍候。');check();this.deleting=true;
+      try{const p=this.store.get(id);const answer=await dialog.showMessageBox(this.window!,{type:'warning',title:'删除录屏项目',message:'删除“'+p.title+'”？',detail:'此项目的原始录屏、音轨、剪辑记录、SOP 和配图将一起移入系统回收站。\n保存在项目目录以外的导出文件，以及导入视频的外部原文件不会删除。',buttons:['取消','删除并移入回收站'],defaultId:0,cancelId:0,noLink:true});
+        if(answer.response!==1)return false;check();await this.store.trash(id,file=>shell.trashItem(file));return true;
+      }finally{this.deleting=false}
+    })
     handle('save',(e,id,edit)=>{this.editor(e);return this.store.save(id,edit)})
     handle('waveform',async(e,id,asset)=>{this.editor(e);const p=this.store.get(id),a=p.assets?.find(a=>a.file===asset);if(!((asset==='mic.wav'&&p.hasMic)||(asset==='system.wav'&&p.hasSystem)||a?.audio))throw Error('素材中没有音频。');const {audioWaveform}=await import('./waveform.js');return audioWaveform(this.bin,this.store.media(id,asset),a?.duration??p.duration)})
     handle('import-media',async(e,id,kind)=>{this.editor(e);this.store.get(id);if(!['audio','video'].includes(kind))throw Error('素材类型无效。');const r=await dialog.showOpenDialog(this.window!,{title:kind==='video'?'添加视频素材':'添加音频素材',properties:['openFile'],filters:[{name:'音视频素材',extensions:kind==='video'?['mp4','mkv','mov','webm','avi']:['wav','mp3','m4a','aac','ogg','flac','mp4']}]});if(!r.canceled)return importTimelineMedia(this.store,this.bin,id,r.filePaths[0],kind)})

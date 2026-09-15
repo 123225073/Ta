@@ -1,3 +1,4 @@
+#include "ta_window_fit.h"
 #include "ta_wave_writer.h"
 #include <mmdeviceapi.h>
 #include <functiondiscoverykeys_devpkey.h>
@@ -1015,6 +1016,8 @@ int wmain(int argc, wchar_t* wideArgv[]) {
     // them is the next bug report, and neither is worth a log line each.
     std::atomic<uint64_t> contendedFrames = 0;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> latestFrameTexture;
+    TaWindowFit windowFit;
+    int windowFitFailures=0;
     std::vector<BYTE> latestWebcamFrame;
     int latestWebcamWidth = 0;
     int latestWebcamHeight = 0;
@@ -1039,7 +1042,7 @@ int wmain(int argc, wchar_t* wideArgv[]) {
                 D3D11_TEXTURE2D_DESC desc{};
                 texture->GetDesc(&desc);
                 desc.Width = width; desc.Height = height;
-                            desc.BindFlags = 0;
+                            desc.BindFlags = config.sourceType == "window" ? D3D11_BIND_RENDER_TARGET : 0;
                 desc.CPUAccessFlags = 0;
                 desc.MiscFlags = 0;
                 if (FAILED(session.device()->CreateTexture2D(&desc, nullptr, &latestFrameTexture))) {
@@ -1141,7 +1144,7 @@ int wmain(int argc, wchar_t* wideArgv[]) {
                             D3D11_TEXTURE2D_DESC desc{};
                             wgcTexture->GetDesc(&desc);
                             desc.Width = width; desc.Height = height;
-                            desc.BindFlags = 0;
+                            desc.BindFlags = config.sourceType == "window" ? D3D11_BIND_RENDER_TARGET : 0;
                             desc.CPUAccessFlags = 0;
                             desc.MiscFlags = 0;
                             if (FAILED(session.device()->CreateTexture2D(&desc, nullptr, &latestFrameTexture))) {
@@ -1157,13 +1160,24 @@ int wmain(int argc, wchar_t* wideArgv[]) {
                         // already owns deciding when to give up -- there is no
                         // separate WGC callback thread left for it to take a
                         // lock down with it.
-                        D3D11_TEXTURE2D_DESC currentDesc{}; wgcTexture->GetDesc(&currentDesc);
-                        if (currentDesc.Width < static_cast<UINT>(config.cropX + width) || currentDesc.Height < static_cast<UINT>(config.cropY + height)) {
-                            std::cout << "{\"event\":\"source-unavailable\"}" << std::endl;
-                            control.setPaused(true); continue;
+                        if(config.sourceType == "window") {
+                            if(!windowFit.copy(session.device(),session.context(),wgcTexture,latestFrameTexture.Get(),session.contentWidth(),session.contentHeight(),width,height)) {
+                                // WGC may still hand out a transition surface just after restore.
+                                // Retry fresh frames briefly, but visibly pause on a sustained failure.
+                                if(++windowFitFailures<8)continue;
+                                windowFitFailures=0;
+                                std::cout << "{\"event\":\"source-unavailable\",\"reason\":\"window-fit-failed\"}" << std::endl;
+                                control.setPaused(true);continue;
+                            }
+                            windowFitFailures=0;
+                        } else {
+                            D3D11_TEXTURE2D_DESC currentDesc{};wgcTexture->GetDesc(&currentDesc);
+                            if(currentDesc.Width < UINT(config.cropX+width)||currentDesc.Height < UINT(config.cropY+height)) {
+                                std::cout << "{\"event\":\"source-unavailable\"}" << std::endl;control.setPaused(true);continue;
+                            }
+                            D3D11_BOX box{UINT(config.cropX),UINT(config.cropY),0,UINT(config.cropX+width),UINT(config.cropY+height),1};
+                            session.context()->CopySubresourceRegion(latestFrameTexture.Get(),0,0,0,0,wgcTexture,0,&box);
                         }
-                        D3D11_BOX box{static_cast<UINT>(config.cropX), static_cast<UINT>(config.cropY), 0, static_cast<UINT>(config.cropX + width), static_cast<UINT>(config.cropY + height), 1};
-                        session.context()->CopySubresourceRegion(latestFrameTexture.Get(), 0, 0, 0, 0, wgcTexture, 0, &box);
                         latestFrameTimestampHns = wgcTimestampHns;
                         firstFrameWritten = true;
                     } else if (!latestFrameTexture) {
