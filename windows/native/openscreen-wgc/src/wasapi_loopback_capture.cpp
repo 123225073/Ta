@@ -170,6 +170,11 @@ bool WasapiLoopbackCapture::initializeMicrophone(const std::wstring& deviceId, c
 }
 
 bool WasapiLoopbackCapture::initialize(WasapiCaptureEndpoint endpoint, const std::wstring& deviceId, const std::wstring& deviceName) {
+    // A stopped stream may be rebound after a device change; its consumer converts
+    // the new mix format back to the recording's original audio format.
+    failed_=true;endpoint_=endpoint;followsDefault_=endpoint==WasapiCaptureEndpoint::SystemLoopback||(deviceId.empty()&&deviceName.empty());
+    captureClient_.Reset();audioClient_.Reset();device_.Reset();deviceEnumerator_.Reset();
+    if(mixFormat_){CoTaskMemFree(mixFormat_);mixFormat_=nullptr;}
     HRESULT hr = CoCreateInstance(
         __uuidof(MMDeviceEnumerator),
         nullptr,
@@ -335,6 +340,7 @@ bool WasapiLoopbackCapture::start(AudioCallback callback) {
     }
 
     callback_ = std::move(callback);
+    failed_=false;
     stopRequested_ = false;
     writtenFrames_ = 0;
     lastDevicePositionEnd_ = 0;
@@ -342,6 +348,7 @@ bool WasapiLoopbackCapture::start(AudioCallback callback) {
 
     HRESULT hr = audioClient_->Start();
     if (!succeeded(hr, "IAudioClient::Start")) {
+        failed_=true;
         return false;
     }
 
@@ -359,6 +366,16 @@ void WasapiLoopbackCapture::stop() {
     if (audioClient_) {
         audioClient_->Stop();
     }
+}
+
+bool WasapiLoopbackCapture::needsReconnect(){
+    if(failed_)return true;
+    DWORD state=0;if(!device_||FAILED(device_->GetState(&state))||state!=DEVICE_STATE_ACTIVE)return true;
+    if(!followsDefault_)return false;
+    Microsoft::WRL::ComPtr<IMMDevice> current;
+    if(FAILED(deviceEnumerator_->GetDefaultAudioEndpoint(endpoint_==WasapiCaptureEndpoint::SystemLoopback?eRender:eCapture,eConsole,&current)))return true;
+    LPWSTR a=nullptr,b=nullptr;bool changed=FAILED(device_->GetId(&a))||FAILED(current->GetId(&b))||!a||!b||wcscmp(a,b)!=0;
+    if(a)CoTaskMemFree(a);if(b)CoTaskMemFree(b);return changed;
 }
 
 const AudioInputFormat& WasapiLoopbackCapture::inputFormat() const {
@@ -392,7 +409,7 @@ void WasapiLoopbackCapture::captureLoop() {
         if (FAILED(hr)) {
             std::cerr << "ERROR: IAudioCaptureClient::GetNextPacketSize failed (hr=0x" << std::hex
                       << hr << std::dec << ")" << std::endl;
-            break;
+            failed_=true;break;
         }
 
         while (packetFrames > 0 && !stopRequested_) {
@@ -406,7 +423,7 @@ void WasapiLoopbackCapture::captureLoop() {
             if (FAILED(hr)) {
                 std::cerr << "ERROR: IAudioCaptureClient::GetBuffer failed (hr=0x" << std::hex
                           << hr << std::dec << ")" << std::endl;
-                break;
+                failed_=true;break;
             }
 
             (void)qpcPosition;
@@ -449,6 +466,7 @@ void WasapiLoopbackCapture::captureLoop() {
             }
         }
 
+        if(failed_)break;
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
 

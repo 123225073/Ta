@@ -33,6 +33,7 @@ public:
     bool initializeMicrophone(const std::wstring& deviceId, const std::wstring& deviceName);
     bool start(AudioCallback callback);
     void stop();
+    bool needsReconnect();
 
     const AudioInputFormat& inputFormat() const;
     const std::wstring& selectedDeviceName() const;
@@ -53,6 +54,9 @@ private:
     AudioCallback callback_;
     std::thread thread_;
     std::atomic<bool> stopRequested_ = false;
+    std::atomic<bool> failed_=false;
+    WasapiCaptureEndpoint endpoint_=WasapiCaptureEndpoint::SystemLoopback;
+    bool followsDefault_=true;
     std::vector<BYTE> silenceBuffer_;
     uint64_t writtenFrames_ = 0;
     uint64_t lastDevicePositionEnd_ = 0;

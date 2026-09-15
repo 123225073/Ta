@@ -96,3 +96,5 @@ wgc = wgc.replace(/\w+\.IsBorderRequired\(false\);/g, '// Ta: the Windows 19041 
 fs.writeFileSync(path.resolve(__dirname, '../native/openscreen-wgc/src/wgc_session.cpp'), wgc)
 
 require('./adapt-window-resize.cjs')
+
+require('./adapt-recording-resilience.cjs')

@@ -35,6 +35,10 @@ contextBridge.exposeInMainWorld('taSop', {
   onProgress:(fn:Listener)=>subscribe('sop:progress',fn),
 })
 contextBridge.exposeInMainWorld('taVideo', {
+  saveSource:(id:string)=>ipcRenderer.invoke('video:save-source',id),
+  chooseSource:(show=true)=>ipcRenderer.invoke('video:choose-source',show),
+  switchSource:(o:unknown)=>ipcRenderer.invoke('video:switch-source',o),
+  onChooseSource:(fn:()=>void)=>{const listener=()=>fn();ipcRenderer.on('video:choose-source',listener);return()=>ipcRenderer.removeListener('video:choose-source',listener)},
   delete:(id:string)=>ipcRenderer.invoke('video:delete',id),
   waveform:(id:string,asset:string)=>ipcRenderer.invoke('video:waveform',id,asset),
   importMedia:(id:string,kind:string)=>ipcRenderer.invoke('video:import-media',id,kind),

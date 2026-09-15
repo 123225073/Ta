@@ -55,6 +55,7 @@ public:
     bool initialize(HMONITOR monitor, int fps, bool captureCursor);
     bool initialize(HWND window, int fps, bool captureCursor);
     bool start();
+    bool retarget(HWND window, HMONITOR monitor);
     // Returns the most recently arrived frame's texture and timestamp, or
     // false if none is available since the last call. The returned pointer
     // is only valid until the next tryGetNextFrame() call or stop() -- copy

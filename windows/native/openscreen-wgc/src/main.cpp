@@ -1,4 +1,5 @@
 #include "ta_window_fit.h"
+#include "ta_capture_health.h"
 #include "ta_wave_writer.h"
 #include <mmdeviceapi.h>
 #include <functiondiscoverykeys_devpkey.h>
@@ -22,6 +23,7 @@
 #include <cstdint>
 #include <functional>
 #include <iostream>
+#include <sstream>
 #include <memory>
 #include <mutex>
 #include <ratio>
@@ -65,6 +67,7 @@ struct CaptureConfig {
 struct CaptureControl {
     std::atomic<bool> stopRequested = false;
     std::atomic<bool> paused = false;
+    std::mutex switchMutex;std::string switchRequest;
     std::mutex mutex;
     std::condition_variable cv;
     // Stop is signalled on its own mutex/CV pair, deliberately not on `mutex`
@@ -641,6 +644,7 @@ void readCaptureCommands(CaptureControl& control, const std::function<void(bool)
             control.requestStop();
             return;
         }
+        if(line.rfind("switch ",0)==0){std::scoped_lock lock(control.switchMutex);control.switchRequest=line.substr(7);continue;}
         if (line == "pause") {
             control.setPaused(true);
             onPauseChanged(true);
@@ -1018,6 +1022,12 @@ int wmain(int argc, wchar_t* wideArgv[]) {
     Microsoft::WRL::ComPtr<ID3D11Texture2D> latestFrameTexture;
     TaWindowFit windowFit;
     int windowFitFailures=0;
+    CaptureConfig activeCapture=config;
+    TaFrameHealth frameHealth;
+    std::atomic<uint64_t> capturedFrames=0;
+    std::atomic<ULONGLONG> lastVideoAt=GetTickCount64();
+    std::atomic<int> micPeak=0,systemPeak=0;
+    ULONGLONG lastSourceRepair=GetTickCount64(),blackAt=0;
     std::vector<BYTE> latestWebcamFrame;
     int latestWebcamWidth = 0;
     int latestWebcamHeight = 0;
@@ -1042,7 +1052,7 @@ int wmain(int argc, wchar_t* wideArgv[]) {
                 D3D11_TEXTURE2D_DESC desc{};
                 texture->GetDesc(&desc);
                 desc.Width = width; desc.Height = height;
-                            desc.BindFlags = config.sourceType == "window" ? D3D11_BIND_RENDER_TARGET : 0;
+                            desc.BindFlags = D3D11_BIND_RENDER_TARGET;
                 desc.CPUAccessFlags = 0;
                 desc.MiscFlags = 0;
                 if (FAILED(session.device()->CreateTexture2D(&desc, nullptr, &latestFrameTexture))) {
@@ -1131,12 +1141,32 @@ int wmain(int argc, wchar_t* wideArgv[]) {
                     }
                     latestFrameTimestampHns = legacyLatestFrameTimestampHns;
                 } else {
+                    // Ta live source switch: only this thread owns WGC; audio and encoder continue.
+                    std::string request;{std::scoped_lock lock(control.switchMutex);request.swap(control.switchRequest);}
+                    if(!request.empty()){
+                        CaptureConfig next;const int serial=findInt(request,"requestId",0);
+                        bool ok=false;
+                        if(parseConfig(request,next)){
+                            HWND hwnd=next.sourceType=="window"?parseWindowHandle(next.windowHandle):nullptr;
+                            HMONITOR monitor=next.sourceType=="display"?findMonitorForCapture(next.displayId,next.hasDisplayBounds?&next.bounds:nullptr):nullptr;
+                            if((hwnd&&IsWindow(hwnd)&&!IsIconic(hwnd))||monitor)ok=session.retarget(hwnd,monitor);
+                            if(ok){activeCapture=next;lastVideoAt=GetTickCount64();frameHealth.black=false;windowFitFailures=0;}
+                        }
+                        std::cout << "{\"event\":\"source-switched\",\"requestId\":"<<serial<<",\"ok\":"<<(ok?"true":"false")<<"}"<<std::endl;
+                    }
                     if (control.paused) {
                         std::this_thread::sleep_for(std::chrono::milliseconds(100));
                         continue;
                     }
 
                     ID3D11Texture2D* wgcTexture = nullptr;
+                    // Retry the same authorized window after persistent black/stalled capture.
+                    // Never silently expand capture to another window or the desktop.
+                    if(frameHealth.black){if(!blackAt)blackAt=GetTickCount64();}else blackAt=0;
+                    if(activeCapture.sourceType=="window"&&GetTickCount64()-lastSourceRepair>15000&&((blackAt&&GetTickCount64()-blackAt>5000)||GetTickCount64()-lastVideoAt.load()>8000)){
+                        lastSourceRepair=GetTickCount64();HWND hwnd=parseWindowHandle(activeCapture.windowHandle);
+                        if(hwnd&&IsWindow(hwnd)&&!IsIconic(hwnd)&&session.retarget(hwnd,nullptr))std::cout<<"{\"event\":\"source-retry\"}"<<std::endl;
+                    }
                     int64_t wgcTimestampHns = 0;
                     const bool gotFrame = session.tryGetNextFrame(&wgcTexture, &wgcTimestampHns);
                     if (gotFrame) {
@@ -1144,7 +1174,7 @@ int wmain(int argc, wchar_t* wideArgv[]) {
                             D3D11_TEXTURE2D_DESC desc{};
                             wgcTexture->GetDesc(&desc);
                             desc.Width = width; desc.Height = height;
-                            desc.BindFlags = config.sourceType == "window" ? D3D11_BIND_RENDER_TARGET : 0;
+                            desc.BindFlags = D3D11_BIND_RENDER_TARGET;
                             desc.CPUAccessFlags = 0;
                             desc.MiscFlags = 0;
                             if (FAILED(session.device()->CreateTexture2D(&desc, nullptr, &latestFrameTexture))) {
@@ -1160,24 +1190,12 @@ int wmain(int argc, wchar_t* wideArgv[]) {
                         // already owns deciding when to give up -- there is no
                         // separate WGC callback thread left for it to take a
                         // lock down with it.
-                        if(config.sourceType == "window") {
-                            if(!windowFit.copy(session.device(),session.context(),wgcTexture,latestFrameTexture.Get(),session.contentWidth(),session.contentHeight(),width,height)) {
-                                // WGC may still hand out a transition surface just after restore.
-                                // Retry fresh frames briefly, but visibly pause on a sustained failure.
-                                if(++windowFitFailures<8)continue;
-                                windowFitFailures=0;
-                                std::cout << "{\"event\":\"source-unavailable\",\"reason\":\"window-fit-failed\"}" << std::endl;
-                                control.setPaused(true);continue;
-                            }
-                            windowFitFailures=0;
-                        } else {
-                            D3D11_TEXTURE2D_DESC currentDesc{};wgcTexture->GetDesc(&currentDesc);
-                            if(currentDesc.Width < UINT(config.cropX+width)||currentDesc.Height < UINT(config.cropY+height)) {
-                                std::cout << "{\"event\":\"source-unavailable\"}" << std::endl;control.setPaused(true);continue;
-                            }
-                            D3D11_BOX box{UINT(config.cropX),UINT(config.cropY),0,UINT(config.cropX+width),UINT(config.cropY+height),1};
-                            session.context()->CopySubresourceRegion(latestFrameTexture.Get(),0,0,0,0,wgcTexture,0,&box);
+                        if(!windowFit.copy(session.device(),session.context(),wgcTexture,latestFrameTexture.Get(),session.contentWidth(),session.contentHeight(),width,height,activeCapture.cropX,activeCapture.cropY,activeCapture.cropW,activeCapture.cropH)) {
+                            if(++windowFitFailures>=8){windowFitFailures=0;std::cout << "{\"event\":\"capture-warning\",\"reason\":\"window-fit-failed\"}" << std::endl;}
+                            continue;
                         }
+                        windowFitFailures=0;capturedFrames++;lastVideoAt=GetTickCount64();
+                        frameHealth.sample(session.device(),session.context(),latestFrameTexture.Get());
                         latestFrameTimestampHns = wgcTimestampHns;
                         firstFrameWritten = true;
                     } else if (!latestFrameTexture) {
@@ -1381,23 +1399,22 @@ int wmain(int argc, wchar_t* wideArgv[]) {
 
     std::unique_ptr<AudioMixer> audioMixer, systemMixer;
     TaWaveWriter micFile, systemFile;
+    std::vector<BYTE> systemConverted,micConverted,systemRemainder,micRemainder;
+    auto systemInput=[&](const BYTE* data,DWORD bytes,int64_t,int64_t){if(!control.stopRequested&&systemMixer){convertAudioWithGain(data,bytes,loopbackCapture.inputFormat(),systemAudioFormat,1.0,systemConverted,systemRemainder);systemMixer->pushSystem(systemConverted.data(),DWORD(systemConverted.size()));}};
+    auto micInput=[&](const BYTE* data,DWORD bytes,int64_t,int64_t){if(!control.stopRequested&&audioMixer){convertAudioWithGain(data,bytes,microphoneCapture.inputFormat(),microphoneAudioFormat,1.0,micConverted,micRemainder);audioMixer->pushMicrophone(micConverted.data(),DWORD(micConverted.size()));}};
     auto startAudioCaptures = [&]() -> bool {
         if (!audioFormat) return true;
         if (config.captureMic) {
             if (!micFile.open(utf8ToWide(config.micPath), encoderAudioFormat)) return false;
             audioMixer = std::make_unique<AudioMixer>(encoderAudioFormat, encoderAudioFormat, microphoneAudioFormat,
-                false, true, config.microphoneGain, [&](const BYTE* data, DWORD bytes, int64_t, int64_t) { if(!micFile.write(data, bytes)){encodeFailed=true;control.requestStop();return false;}return true; });
-            if (!audioMixer->start() || !microphoneCapture.start([&](const BYTE* data, DWORD bytes, int64_t, int64_t) {
-                if (!control.stopRequested && audioMixer) audioMixer->pushMicrophone(data, bytes);
-            })) return false;
+                false, true, config.microphoneGain, [&](const BYTE* data, DWORD bytes, int64_t, int64_t) { taPcmPeak(micPeak,data,bytes);if(!micFile.write(data, bytes)){encodeFailed=true;control.requestStop();return false;}return true; });
+            if (!audioMixer->start() || !microphoneCapture.start(micInput)) return false;
         }
         if (config.captureSystemAudio) {
             if (!systemFile.open(utf8ToWide(config.systemPath), encoderAudioFormat)) return false;
             systemMixer = std::make_unique<AudioMixer>(encoderAudioFormat, systemAudioFormat, encoderAudioFormat,
-                true, false, 1.0, [&](const BYTE* data, DWORD bytes, int64_t, int64_t) { if(!systemFile.write(data, bytes)){encodeFailed=true;control.requestStop();return false;}return true; });
-            if (!systemMixer->start() || !loopbackCapture.start([&](const BYTE* data, DWORD bytes, int64_t, int64_t) {
-                if (!control.stopRequested && systemMixer) systemMixer->pushSystem(data, bytes);
-            })) return false;
+                true, false, 1.0, [&](const BYTE* data, DWORD bytes, int64_t, int64_t) { taPcmPeak(systemPeak,data,bytes);if(!systemFile.write(data, bytes)){encodeFailed=true;control.requestStop();return false;}return true; });
+            if (!systemMixer->start() || !loopbackCapture.start(systemInput)) return false;
         }
         return true;
     };
@@ -1500,7 +1517,29 @@ int wmain(int argc, wchar_t* wideArgv[]) {
     std::cout << "{\"event\":\"recording-started\",\"schemaVersion\":2}" << std::endl;
     std::cout << "Recording started" << std::endl;
 
-    control.waitForStop();
+    ULONGLONG nextAudioCheck=0;
+    const int testReconnectMs=readEnvInt("TA_TEST_RECONNECT_AUDIO_AT_MS",0);bool testReconnected=false;
+    while(!control.stopRequested){
+        if(GetTickCount64()>=nextAudioCheck){nextAudioCheck=GetTickCount64()+3000;
+            const bool testReconnect=testReconnectMs>0&&!testReconnected&&std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-control.recordingStartedAt).count()>=testReconnectMs;
+            if(config.captureSystemAudio&&(loopbackCapture.needsReconnect()||testReconnect)){
+                if(testReconnect)testReconnected=true;
+                std::cout<<"{\"event\":\"audio-error\",\"stream\":\"system\"}"<<std::endl;
+                loopbackCapture.stop();systemRemainder.clear();
+                if(loopbackCapture.initializeSystemLoopback()&&loopbackCapture.start(systemInput))std::cout<<"{\"event\":\"audio-reconnected\",\"stream\":\"system\"}"<<std::endl;
+            }
+            if(config.captureMic&&microphoneCapture.needsReconnect()){
+                std::cout<<"{\"event\":\"audio-error\",\"stream\":\"mic\"}"<<std::endl;
+                microphoneCapture.stop();micRemainder.clear();
+                if(microphoneCapture.initializeMicrophone(utf8ToWide(config.microphoneDeviceId),utf8ToWide(config.microphoneDeviceName))&&microphoneCapture.start(micInput))std::cout<<"{\"event\":\"audio-reconnected\",\"stream\":\"mic\"}"<<std::endl;
+            }
+        }
+        std::unique_lock lock(control.stopMutex);control.stopCv.wait_for(lock,std::chrono::seconds(1),[&]{return control.stopRequested.load();});lock.unlock();
+        if(!control.stopRequested&&!control.paused){std::ostringstream health;
+            health<<"{\"event\":\"capture-health\",\"frames\":"<<capturedFrames.load()<<",\"black\":"<<(frameHealth.black?"true":"false")<<",\"videoAgeMs\":"<<(GetTickCount64()-lastVideoAt.load())<<",\"systemPeak\":"<<systemPeak.exchange(0)/32768.0<<",\"micPeak\":"<<micPeak.exchange(0)/32768.0<<"}";
+            std::cout<<health.str()<<std::endl;
+        }else{micPeak=0;systemPeak=0;lastVideoAt=GetTickCount64();}
+    }
 
     const auto stopStart = std::chrono::steady_clock::now();
     auto stopElapsedMs = [&] {

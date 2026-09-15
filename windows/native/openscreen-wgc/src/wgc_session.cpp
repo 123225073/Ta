@@ -263,6 +263,26 @@ bool WgcSession::initialize(HWND window, int fps, bool captureCursor) {
     return true;
 }
 
+// Called only by the pull/encode thread. Keep the D3D device and encoder alive.
+bool WgcSession::retarget(HWND window, HMONITOR monitor) {
+    try {
+        auto interop=winrt::get_activation_factory<wgcap::GraphicsCaptureItem>().as<IGraphicsCaptureItemInterop>();
+        wgcap::GraphicsCaptureItem item{nullptr};
+        HRESULT hr=window?interop->CreateForWindow(window,winrt::guid_of<wgcap::GraphicsCaptureItem>(),reinterpret_cast<void**>(winrt::put_abi(item))):interop->CreateForMonitor(monitor,winrt::guid_of<wgcap::GraphicsCaptureItem>(),reinterpret_cast<void**>(winrt::put_abi(item)));
+        if(FAILED(hr))return false;
+        auto size=item.Size();if(size.Width<2||size.Height<2)return false;
+        int w=roundUpToEven(size.Width),h=roundUpToEven(size.Height);
+        auto pool=wgcap::Direct3D11CaptureFramePool::CreateFreeThreaded(winrtDevice_,wgdx::DirectXPixelFormat::B8G8R8A8UIntNormalized,2,{w,h});
+        auto next=pool.CreateCaptureSession(item);
+        if(auto options=next.try_as<wgcap::IGraphicsCaptureSession2>())options.IsCursorCaptureEnabled(captureCursor_);
+        next.StartCapture();
+        if(currentFrame_){currentFrame_.Close();currentFrame_=nullptr;}
+        session_.Close();framePool_.Close();
+        item_=item;framePool_=pool;session_=next;width_=w;height_=h;contentWidth_=size.Width;contentHeight_=size.Height;
+        return true;
+    }catch(...){return false;}
+}
+
 bool WgcSession::start() {
     if (!session_) {
         return false;

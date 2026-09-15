@@ -14,7 +14,7 @@ class TaWindowFit {
     Microsoft::WRL::ComPtr<ID3D11VideoProcessor> processor_;
     int w_=0,h_=0;
 public:
-    bool copy(ID3D11Device* device, ID3D11DeviceContext* context, ID3D11Texture2D* input, ID3D11Texture2D* output, int width, int height, int outW, int outH) {
+    bool copy(ID3D11Device* device, ID3D11DeviceContext* context, ID3D11Texture2D* input, ID3D11Texture2D* output, int width, int height, int outW, int outH, int x=0, int y=0, int cropW=0, int cropH=0) {
         if ((!device_ || !context_) && (FAILED(device->QueryInterface(IID_PPV_ARGS(&device_))) || FAILED(context->QueryInterface(IID_PPV_ARGS(&context_))))) return false;
         if (!processor_ || w_!=width || h_!=height) {
             processor_.Reset(); enumerator_.Reset();
@@ -31,9 +31,11 @@ public:
         D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC outDesc{};outDesc.ViewDimension=D3D11_VPOV_DIMENSION_TEXTURE2D;
         const HRESULT inResult=device_->CreateVideoProcessorInputView(input,enumerator_.Get(),&inDesc,&inView),outResult=device_->CreateVideoProcessorOutputView(output,enumerator_.Get(),&outDesc,&outView);
         if(FAILED(inResult)||FAILED(outResult)){std::cerr<<"Window fit views "<<std::hex<<inResult<<" "<<outResult<<std::dec<<" size "<<width<<"x"<<height<<std::endl;return false;}
-        const double scale=std::min(double(outW)/width,double(outH)/height);
-        const int fitW=std::max(1,int(std::round(width*scale))),fitH=std::max(1,int(std::round(height*scale)));
-        RECT source{0,0,width,height},dest{(outW-fitW)/2,(outH-fitH)/2,(outW-fitW)/2+fitW,(outH-fitH)/2+fitH},target{0,0,outW,outH};
+        const int sw=cropW>0?cropW:width,sh=cropH>0?cropH:height;
+        if(x<0||y<0||x+sw>width||y+sh>height)return false;
+        const double scale=std::min(double(outW)/sw,double(outH)/sh);
+        const int fitW=std::max(1,int(std::round(sw*scale))),fitH=std::max(1,int(std::round(sh*scale)));
+        RECT source{x,y,x+sw,y+sh},dest{(outW-fitW)/2,(outH-fitH)/2,(outW-fitW)/2+fitW,(outH-fitH)/2+fitH},target{0,0,outW,outH};
         D3D11_VIDEO_COLOR black{};black.RGBA.A=1;
         context_->VideoProcessorSetOutputBackgroundColor(processor_.Get(),FALSE,&black);
         context_->VideoProcessorSetOutputTargetRect(processor_.Get(),TRUE,&target);

@@ -7,6 +7,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import { VideoStore } from './store'
+import {RecordingHealth,type CaptureHealth} from './health'
 import { VideoExporter } from './export'
 import { SopService, type AIContext } from '../sop/service'
 import { installSop } from '../sop/ipc'
@@ -25,6 +26,10 @@ export class VideoController {
   private closeDone?:()=>void
   private checkingSource=false
   private pauseAlert=false
+  private health=new RecordingHealth();private healthAt=0;private qualityAlert=false;private lastQuality=new Map<string,number>();
+  private switchSerial=0;private switchAck?:{id:number;done:(ok:boolean)=>void};
+  private lastHealthLog=0;
+  private recordEvent(event:string,detail:unknown){if(!this.project)return;try{fs.appendFileSync(path.join(this.store.directory(this.project.id),'recording-events.jsonl'),JSON.stringify({time:new Date().toISOString(),elapsed:this.elapsed(),event,detail})+'\n')}catch{/* Recording remains the priority if diagnostics cannot be written. */}}
   private deleting=false
   private sop:SopService
   private cliQueue:Promise<unknown>=Promise.resolve()
@@ -64,8 +69,35 @@ export class VideoController {
     return this.sources
   }
   private async microphones(){try{return JSON.parse((await exec(path.join(this.bin,'ta-recorder.exe'),['--list-mics'],{windowsHide:true,timeout:10000})).stdout) as string[]}catch{return[]}}
-  private async windowInfo(id:string){const h=id.split(':')[1];if(!/^\d+$/.test(h))throw Error('窗口标识无效。');return JSON.parse((await exec(path.join(this.bin,'ta-recorder.exe'),['--window-info',h],{windowsHide:true,timeout:5000})).stdout) as Rect&{minimized:boolean}}
-  private async checkSource(){if(this.checkingSource||this.currentSource?.kind!=='window'||this.state.phase!=='recording')return;this.checkingSource=true;try{const r=await this.windowInfo(this.currentSource.id);if(r.minimized){await this.pause(true,'窗口已最小化，录制已暂停。');return}const bounds=screen.screenToDipRect(null,r);this.ink?.setBounds(bounds);this.state.bounds=bounds}catch{await this.pause(true,'录制窗口已关闭，请停止并保存已录片段。')}finally{this.checkingSource=false}}
+  private async windowInfo(id:string){const h=id.split(':')[1];if(!/^\d+$/.test(h))throw Error('窗口标识无效。');return JSON.parse((await exec(path.join(this.bin,'ta-recorder.exe'),['--window-info',h],{windowsHide:true,timeout:5000}).catch(()=>{throw Error('无法读取目标窗口，请恢复窗口，或刷新后选择其他录制范围。')})).stdout) as Rect&{minimized:boolean}}
+  private async checkSource(){if(this.checkingSource||this.state.switching||this.currentSource?.kind!=='window'||this.state.phase!=='recording')return;this.checkingSource=true;const id=this.currentSource.id;try{const r=await this.windowInfo(id);if(id!==this.currentSource?.id)return;if(r.minimized){void this.warnQuality('录制窗口已最小化，画面可能停止更新。请恢复窗口或切换录制范围。');return}const bounds=screen.screenToDipRect(null,r);this.ink?.setBounds(bounds);this.state.bounds=bounds}catch{if(id===this.currentSource?.id)void this.warnQuality('原录制窗口已关闭或被软件替换，请选择新的窗口或全屏。')}finally{this.checkingSource=false}}
+  private async stopForFailure(message:string){if(this.state.phase==='stopping'||this.state.phase==='idle')return;this.state.message=message;await this.stop();await this.warnQuality(message)}
+  private async chooseSource(show=true){this.state.choosingSource=show;if(show)await this.open();this.send()}
+  private async warnQuality(message:string){
+    this.state.message=message;this.send();
+    if(this.qualityAlert||Date.now()-(this.lastQuality.get(message)??0)<60000)return;
+    this.lastQuality.set(message,Date.now());this.qualityAlert=true;this.recordEvent('warning',message);
+    try{const owner=this.window&&!this.window.isDestroyed()?this.window:this.hud;owner?.show();owner?.focus();owner?.flashFrame(true);shell.beep();
+      const options:Electron.MessageBoxOptions={type:'warning',title:'录制异常提醒',message:'请检查当前录制',detail:message+'\n'+(this.state.phase==='idle'?'本次录制已停止。':'录制仍在继续，能够采集的声音会继续保存。')+'黑画面或安静内容也可能触发提醒，请核对实际内容。',buttons:['切换录制范围','继续录制并观察','停止并保存'],defaultId:0,cancelId:1,noLink:true};
+      const result=owner?await dialog.showMessageBox(owner,options):await dialog.showMessageBox(options);
+      if(owner&&!owner.isDestroyed())owner.flashFrame(false);
+      if(this.active()){if(result.response===0)await this.chooseSource();if(result.response===2)await this.stop();if(result.response===3)await this.chooseSource()}
+    }catch(e){this.state.message=(e as Error).message;this.send()}finally{this.qualityAlert=false}
+  }
+  async switchSource(options:Pick<RecordingOptions,'sourceId'|'region'>){
+    if(!['recording','paused'].includes(this.state.phase)||!this.child||!this.project)throw Error('请先开始录制。');if(this.state.switching)throw Error('正在切换录制范围。');
+    const source=this.sources.find(s=>s.id===options.sourceId);if(!source)throw Error('请刷新并选择录制范围。');
+    let physical:Rect,crop:Rect,dip:Rect;
+    if(source.kind==='screen'){if(!source.bounds)throw Error('显示器已断开。');physical=source.physical??screen.dipToScreenRect(null,source.bounds);const r=options.region??{x:0,y:0,width:physical.width,height:physical.height};
+      if(![r.x,r.y,r.width,r.height].every(Number.isFinite)||r.x<0||r.y<0||r.width<16||r.height<16||r.x+r.width>physical.width||r.y+r.height>physical.height)throw Error('录制框超出屏幕范围。');
+      crop={x:Math.round(r.x),y:Math.round(r.y),width:Math.floor(r.width/2)*2,height:Math.floor(r.height/2)*2};dip=screen.screenToDipRect(null,{x:physical.x+crop.x,y:physical.y+crop.y,width:crop.width,height:crop.height});
+    }else{physical=await this.windowInfo(source.id);if((physical as Rect&{minimized:boolean}).minimized)throw Error('请先恢复目标窗口。');crop={x:0,y:0,width:physical.width,height:physical.height};dip=screen.screenToDipRect(null,physical)}
+    this.state.switching=true;this.send();const id=++this.switchSerial;
+    try{await new Promise<void>((resolve,reject)=>{const timer=setTimeout(()=>{this.switchAck=undefined;reject(Error('切换录制范围超时，请停止保存后重新录制。'))},12000);this.switchAck={id,done:ok=>{clearTimeout(timer);this.switchAck=undefined;ok?resolve():reject(Error('目标窗口无法捕获，请选择其他窗口或全屏。'))}};
+      this.child!.stdin.write('switch '+JSON.stringify({requestId:id,screenPath:'unused',sourceType:source.kind==='window'?'window':'display',sourceId:source.id,displayId:Number(source.displayId)||0,hasDisplayBounds:source.kind==='screen',displayX:physical.x,displayY:physical.y,displayW:physical.width,displayH:physical.height,...(source.kind==='screen'&&options.region?{cropX:crop.x,cropY:crop.y,cropW:crop.width,cropH:crop.height}:{})})+'\n');});
+      this.recordEvent('source-switch',{source:source.name,region:options.region});this.state.choosingSource=false;this.currentSource=source;this.state.sourceName=source.name;this.state.bounds=dip;this.ink?.setBounds(dip);this.health.reset();this.healthAt=Date.now();this.lastQuality.clear();this.state.message='已切换录制范围，继续保存在当前录屏中。';if(this.state.phase==='paused')await this.pause(false);this.window?.hide();
+    }finally{this.state.switching=false;this.send()}
+  }
   async start(options:RecordingOptions){
     if(this.deleting)throw Error('正在删除项目，请稍后录制。');if(this.active())throw Error('已有录制正在进行。')
     if(!fs.existsSync(path.join(this.bin,'ta-recorder.exe'))||!fs.existsSync(path.join(this.bin,'ffprobe.exe')))throw Error('录屏组件尚未准备好，请完成视频组件构建。')
@@ -80,13 +112,13 @@ export class VideoController {
     }else{physical=await this.windowInfo(source.id);if((physical as Rect&{minimized:boolean}).minimized)throw Error('请先恢复要录制的窗口。');crop={x:0,y:0,width:Math.floor(physical.width/2)*2,height:Math.floor(physical.height/2)*2};dip=screen.screenToDipRect(null,physical)}
     const p=this.store.create(crop.width,crop.height,options.mic,options.system);this.project=p;this.currentSource=source
     this.store.saveSettings({...this.store.settings,mic:options.mic,system:options.system,micName:options.micName})
-    this.state={phase:'starting',elapsed:0,id:p.id,bounds:dip,width:p.width,height:p.height,drawing:false};this.accumulated=0;this.send();this.errorLog=''
+    this.health.reset();this.healthAt=Date.now();this.lastQuality.clear();this.state={phase:'starting',sourceName:source.name,elapsed:0,id:p.id,bounds:dip,width:p.width,height:p.height,drawing:false};this.accumulated=0;this.send();this.errorLog=''
     const config={schemaVersion:2,sourceType:source.kind==='screen'?'display':'window',sourceId:source.id,displayId:Number(source.displayId)||0,hasDisplayBounds:source.kind==='screen',displayX:physical.x,displayY:physical.y,displayW:physical.width,displayH:physical.height,cropX:crop.x,cropY:crop.y,...(source.kind==='screen'&&options.region?{cropW:crop.width,cropH:crop.height}:{}),fps:30,captureCursor:true,captureMic:options.mic,captureSystemAudio:options.system,microphoneDeviceName:options.micName,screenPath:this.store.file(p.id,'screen.mp4'),systemPath:this.store.file(p.id,'system.wav'),micPath:this.store.file(p.id,'mic.wav')}
     this.ink=this.createWindow('video-ink',{...dip,frame:false,thickFrame:false,resizable:false,transparent:true,alwaysOnTop:true,skipTaskbar:true,hasShadow:false,focusable:true});this.ink.setContentProtection(true);this.ink.setIgnoreMouseEvents(true,{forward:true})
-    const d=screen.getDisplayMatching(dip);this.hud=this.createWindow('video-hud',{x:d.workArea.x+Math.max(0,Math.floor((d.workArea.width-660)/2)),y:d.workArea.y+16,width:660,height:112,frame:false,alwaysOnTop:true,skipTaskbar:true,resizable:false,backgroundColor:'#11171C'});this.hud.setContentProtection(true);this.hud.setAlwaysOnTop(true,'screen-saver');this.hud.on('close',e=>{if(this.active()){e.preventDefault();void this.stop()}})
+    const d=screen.getDisplayMatching(dip);this.hud=this.createWindow('video-hud',{x:d.workArea.x+Math.max(0,Math.floor((d.workArea.width-820)/2)),y:d.workArea.y+16,width:820,height:132,frame:false,alwaysOnTop:true,skipTaskbar:true,resizable:false,backgroundColor:'#11171C'});this.hud.setContentProtection(true);this.hud.setAlwaysOnTop(true,'screen-saver');this.hud.on('close',e=>{if(this.active()){e.preventDefault();void this.stop()}})
     this.window?.hide()
     const child=spawn(path.join(this.bin,'ta-recorder.exe'),[JSON.stringify(config)],{windowsHide:true,env:{...process.env,OPENSCREEN_WGC_LEGACY_FRAME_CALLBACK:'0'}});this.child=child;child.stdin.on('error',()=>{this.state.message='录制控制连接已断开，正在保留已录片段。'})
-    this.stopWait=new Promise<void>(resolve=>child.once('close',code=>{if(code!==0)this.state.message='录制程序异常结束，已保留可恢复片段。';void this.finish().finally(resolve)}))
+    this.stopWait=new Promise<void>(resolve=>child.once('close',code=>{if(code!==0)this.state.message='录制程序异常结束，已保留可恢复片段。';this.switchAck?.done(false);void this.finish().then(()=>{if(code!==0)void this.warnQuality('录制程序异常结束，录制已停止，已保留可恢复片段。')}).finally(resolve)}))
     child.stderr.on('data',d=>{this.errorLog=(this.errorLog+d).slice(-5000)})
     let buffer=''
     await new Promise<void>((resolve,reject)=>{
@@ -95,17 +127,22 @@ export class VideoController {
       child.once('close',code=>{clearTimeout(timer);if(this.state.phase==='starting')reject(Error('录制启动失败：'+this.errorLog.slice(-500)))})
       child.stdout.on('data',d=>{buffer+=d;const lines=buffer.split('\n');buffer=lines.pop()??'';for(const line of lines){if(!line.startsWith('{'))continue;let msg;try{msg=JSON.parse(line)}catch{continue}
         if(msg.event==='ta-size'){p.width=msg.width;p.height=msg.height;p.crop={x:0,y:0,width:p.width,height:p.height};this.state.width=p.width;this.state.height=p.height;this.store.write(p)}
-        if(msg.event==='source-unavailable'){void this.pause(true,'无法继续捕获录制画面，录制已暂停。请恢复窗口后重试，或停止保存已录内容。')}
-        if(msg.event==='recording-started'){clearTimeout(timer);this.state.phase='recording';this.started=Date.now();this.send();this.tick=setInterval(()=>{void this.checkSource();this.send();p.duration=Math.max(1,this.elapsed());try{this.store.write(p)}catch{this.state.message='保存编辑记录失败，正在停止录制并保留原片。';void this.stop();return}try{const s=fs.statfsSync(this.store.directory(p.id));if(s.bavail*s.bsize<512*1024*1024)void this.stop()}catch{}},1000);resolve()}
+        if(msg.event==='source-unavailable'||msg.event==='capture-warning'){void this.warnQuality('录制画面采集异常，请切换窗口、全屏或录制区域。')}
+        if(msg.event==='source-switched'&&this.switchAck&&this.switchAck.id===msg.requestId)this.switchAck.done(msg.ok===true);
+        if(msg.event==='capture-health'&&this.state.phase==='recording'){this.healthAt=Date.now();this.state.health=msg as CaptureHealth;if(Date.now()-this.lastHealthLog>10000){this.recordEvent('health',msg);this.lastHealthLog=Date.now()}const issues=this.health.check(msg,Date.now(),p.hasSystem,p.hasMic);if(issues.length)void this.warnQuality(issues.join('；'));}
+        if(msg.event==='source-retry')this.recordEvent('source-retry',{source:this.currentSource?.name});
+        if(msg.event==='audio-reconnected'){this.recordEvent('audio-reconnected',{stream:msg.stream});this.state.message='声音设备已重新连接，请核对音量信号。';this.send()}
+        if(msg.event==='audio-error')void this.warnQuality('音频设备已断开或捕获失败，请检查会议扬声器/耳机设置。画面仍继续录制。');
+        if(msg.event==='recording-started'){clearTimeout(timer);this.state.phase='recording';this.started=Date.now();this.send();this.tick=setInterval(()=>{void this.checkSource();if(this.state.phase==='recording'&&Date.now()-this.healthAt>10000)void this.warnQuality('录制组件超过 10 秒没有返回状态，可能已停止正常采集。');this.send();p.duration=Math.max(1,this.elapsed());try{this.store.write(p)}catch{void this.stopForFailure('保存录制记录失败，已停止录制并保留原始片段。');return}try{const s=fs.statfsSync(this.store.directory(p.id));if(s.bavail*s.bsize<512*1024*1024)void this.stopForFailure('保存磁盘剩余空间不足，已停止录制。请清理空间后重新开始。')}catch{}},1000);resolve()}
       }})
     })
     return p.id
   }
-  async pause(paused:boolean,message?:string){if(!['paused','recording'].includes(this.state.phase))return;if(paused&&this.state.phase==='recording'){this.accumulated=this.elapsed();this.state.phase='paused';this.child?.stdin.write('pause\n')}else if(!paused&&this.state.phase==='paused'){if(this.currentSource?.kind==='window'&&(await this.windowInfo(this.currentSource.id)).minimized)throw Error('请先恢复录制窗口。');this.started=Date.now();this.state.phase='recording';this.child?.stdin.write('resume\n')}this.state.message=message;this.send();if(paused&&message)void this.warnPaused(message)}
+  async pause(paused:boolean,message?:string){if(!['paused','recording'].includes(this.state.phase))return;if(paused&&this.state.phase==='recording'){this.accumulated=this.elapsed();this.state.phase='paused';this.child?.stdin.write('pause\n')}else if(!paused&&this.state.phase==='paused'){if(this.currentSource?.kind==='window'&&(await this.windowInfo(this.currentSource.id)).minimized)throw Error('请先恢复录制窗口。');this.health.reset();this.healthAt=Date.now();this.started=Date.now();this.state.phase='recording';this.child?.stdin.write('resume\n')}this.state.message=message;this.send();if(paused&&message)void this.warnPaused(message)}
   private async warnPaused(message:string){
     if(this.pauseAlert)return;this.pauseAlert=true;
     try{const owner=this.hud??this.window;if(owner){owner.show();owner.focus();owner.flashFrame(true)}shell.beep();
-      const options:Electron.MessageBoxOptions={type:'warning',title:'录制已暂停',message:'录制已暂停，请注意',detail:message+'\n暂停期间不会保存新的画面或声音。已录内容仍保留。',buttons:['知道了','恢复窗口后继续','停止并保存'],defaultId:0,cancelId:0,noLink:true};
+      const options:Electron.MessageBoxOptions={type:'warning',title:'录制已暂停',message:'录制已暂停，请注意',detail:message+'\n暂停期间不会保存新的画面或声音。已录内容仍保留。',buttons:['知道了','恢复窗口后继续','停止并保存','切换录制范围'],defaultId:0,cancelId:0,noLink:true};
       const result=owner?await dialog.showMessageBox(owner,options):await dialog.showMessageBox(options);
       if(owner&&!owner.isDestroyed())owner.flashFrame(false);
       if(this.state.phase==='paused'){if(result.response===1)await this.pause(false);if(result.response===2)await this.stop()}
@@ -113,7 +150,7 @@ export class VideoController {
   }
   async stop(){if(!this.child)return;if(this.state.phase!=='stopping'){this.accumulated=this.elapsed();this.state.phase='stopping';this.child.stdin.write('stop\n');this.send()}await this.stopWait}
   private async finish(){
-    if(this.tick)clearInterval(this.tick);const p=this.project;if(!p)return;this.project=undefined;this.child=undefined
+    if(this.tick)clearInterval(this.tick);this.health.reset();const p=this.project;if(!p)return;this.project=undefined;this.child=undefined
     try{const {stdout}=await exec(path.join(this.bin,'ffprobe.exe'),['-v','error','-show_streams','-show_format','-of','json',this.store.file(p.id,'screen.mp4')],{windowsHide:true,timeout:15000});const info=JSON.parse(stdout),video=info.streams.find((s:{codec_type:string})=>s.codec_type==='video');if(!video)throw Error('没有有效视频帧');p.duration=Math.round(Number(info.format.duration)*1000);p.width=video.width;p.height=video.height;p.crop={x:0,y:0,width:p.width,height:p.height};p.marks=p.marks.map(m=>({...m,end:Math.min(m.end,p.duration),points:m.points?.filter(pt=>pt.t===undefined||pt.t<=p.duration)})).filter(m=>m.end>m.start);p.status=this.state.message?.includes('异常结束')?'recovered':'ready';this.store.write(p)
       await exec(path.join(this.bin,'ffmpeg.exe'),['-v','error','-y','-i',this.store.file(p.id,'screen.mp4'),'-frames:v','1','-vf','scale=360:-2',this.store.file(p.id,'thumbnail.jpg')],{windowsHide:true,timeout:15000})
     }catch(e){p.status='recovered';p.duration=Math.max(1,p.duration);try{this.store.write(p)}catch{/* Source media and last checkpoint remain available. */}this.state.message='录制未正常结束，已保留原始片段。'+(e instanceof Error?e.message:'')}
@@ -139,6 +176,7 @@ export class VideoController {
     handle('save',(e,id,edit)=>{this.editor(e);return this.store.save(id,edit)})
     handle('waveform',async(e,id,asset)=>{this.editor(e);const p=this.store.get(id),a=p.assets?.find(a=>a.file===asset);if(!((asset==='mic.wav'&&p.hasMic)||(asset==='system.wav'&&p.hasSystem)||a?.audio))throw Error('素材中没有音频。');const {audioWaveform}=await import('./waveform.js');return audioWaveform(this.bin,this.store.media(id,asset),a?.duration??p.duration)})
     handle('import-media',async(e,id,kind)=>{this.editor(e);this.store.get(id);if(!['audio','video'].includes(kind))throw Error('素材类型无效。');const r=await dialog.showOpenDialog(this.window!,{title:kind==='video'?'添加视频素材':'添加音频素材',properties:['openFile'],filters:[{name:'音视频素材',extensions:kind==='video'?['mp4','mkv','mov','webm','avi']:['wav','mp3','m4a','aac','ogg','flac','mp4']}]});if(!r.canceled)return importTimelineMedia(this.store,this.bin,id,r.filePaths[0],kind)})
+    handle('choose-source',(_e,show)=>this.chooseSource(show!==false));handle('switch-source',(e,o)=>{this.editor(e);return this.switchSource(o)});
     handle('start',(e,o)=>{this.editor(e);return this.start(o)})
     handle('pause',(_e,p)=>this.pause(p===true));handle('stop',()=>this.stop());handle('ink',()=>this.toggleInk())
     handle('mark',(_e,mark:Mark)=>{const p=this.project;if(!p||this.state.phase!=='recording')return;const duration=Math.max(86400000,this.elapsed()+1);const m={...mark,start:clamp(mark.start,0,this.elapsed()),end:duration};const checked=validateEdits({...p,marks:[...p.marks,m]}, {...p,duration});p.marks=checked.marks;this.store.write(p);this.send()})
@@ -146,7 +184,8 @@ export class VideoController {
     handle('undo-mark',()=>{this.project?.marks.pop();if(this.project)this.store.write(this.project);this.send()})
     handle('settings',async(e,changes:Partial<VideoSettings>)=>{this.editor(e);const s={...this.store.settings,...changes,root:this.store.settings.root};if(![s.startKey,s.pauseKey,s.stopKey,s.annotateKey].every(k=>typeof k==='string'&&k.length<80)||new Set([s.startKey,s.pauseKey,s.stopKey,s.annotateKey].filter(Boolean)).size!==[s.startKey,s.pauseKey,s.stopKey,s.annotateKey].filter(Boolean).length||![0,3,5].includes(s.countdown))throw Error('快捷键或倒计时设置无效。');const previous=this.store.settings;this.store.saveSettings(s);const keys=this.registerHotkeys();if(keys.some(k=>!k)){this.store.saveSettings(previous);this.registerHotkeys();throw Error('部分快捷键被占用，请换一个组合。')}return s})
     handle('choose-root',async(e)=>{this.editor(e);const r=await dialog.showOpenDialog(this.window!,{properties:['openDirectory','createDirectory']});if(!r.canceled)this.store.saveSettings({...this.store.settings,root:r.filePaths[0]});return this.store.settings})
-    handle('folder',(e,id)=>{this.editor(e);return shell.openPath(id?this.store.directory(id):this.store.settings.root)})
+    handle('folder',async(e,id)=>{this.editor(e);const error=await shell.openPath(id?this.store.directory(id):this.store.settings.root);if(error)throw Error(error)})
+    handle('save-source',async(e,id)=>{this.editor(e);const p=this.store.get(id);if(p.status==='recording'||this.deleting)throw Error('请等待录制或删除结束。');const r=await dialog.showSaveDialog(this.window!,{title:'另存原始视频（含录制音轨）',defaultPath:p.title.replace(/[<>:"/\\|?*]/g,'-')+'.mp4',filters:[{name:'MP4 视频',extensions:['mp4']}]});if(r.canceled||!r.filePath)return;if(fs.existsSync(r.filePath))throw Error('文件已存在，请使用新名称。');return this.exporter.source(p,r.filePath)})
     handle('export',async(e,id,height)=>{this.editor(e);if(![720,1080,2160,99999].includes(height))throw Error('输出尺寸无效。');const p=this.store.get(id);const r=await dialog.showSaveDialog(this.window!,{title:'导出视频',defaultPath:`${p.title.replace(/[<>:"/\\|?*]/g,'-')}-${Date.now()}.mp4`,filters:[{name:'MP4 视频',extensions:['mp4']}]});if(r.canceled||!r.filePath)return;if(fs.existsSync(r.filePath))throw Error('该文件已经存在，请使用新名称以保留旧成片。');return this.exporter.export(p,r.filePath,height)})
     handle('cancel-export',()=>this.exporter.cancel())
     protocol.handle('ta-video',async request=>{try{const u=new URL(request.url),[id,name]=u.pathname.split('/').filter(Boolean);if(u.hostname!=='media')return new Response(null,{status:404});const file=assetPattern.test(name)?path.join(this.store.directory(id),name):this.store.media(id,name);return mediaResponse(file,request)}catch{return new Response(null,{status:404})}})

@@ -14,7 +14,7 @@ export interface VideoProject {
 }
 export interface RecordingSource { id: string; name: string; kind: 'screen' | 'window'; displayId: string; thumbnail: string; bounds?: Rect; physical?:Rect; scale: number }
 export interface RecordingOptions { sourceId: string; region?: Rect; mic: boolean; micName: string; system: boolean }
-export interface RecordingState { phase: 'idle' | 'starting' | 'recording' | 'paused' | 'stopping'; id?: string; elapsed: number; message?: string; bounds?: Rect; width?: number; height?: number; marks?: Mark[]; drawing?: boolean }
+export interface RecordingState { phase: 'idle' | 'starting' | 'recording' | 'paused' | 'stopping'; id?: string; elapsed: number; message?: string; bounds?: Rect; width?: number; height?: number; marks?: Mark[]; drawing?: boolean; switching?:boolean; choosingSource?:boolean; sourceName?:string; health?:import('./health').CaptureHealth }
 export interface VideoSettings { root: string; startKey: string; pauseKey: string; stopKey: string; annotateKey: string; system: boolean; mic: boolean; micName: string; countdown: number }
 export interface ExportProgress { id: string; phase: 'rendering' | 'done' | 'error' | 'canceled'; progress: number; message: string }
 export const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n))

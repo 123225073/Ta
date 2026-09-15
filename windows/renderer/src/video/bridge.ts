@@ -2,6 +2,8 @@ import type { ExportProgress, Mark, RecordingOptions, RecordingSource, Recording
 export type * from '../../../electron/video/model'
 declare global {
   interface Window { taVideo: {
+    saveSource(id:string):Promise<string|undefined>;
+    chooseSource(show?:boolean):Promise<void>;switchSource(o:Pick<RecordingOptions,'sourceId'|'region'>):Promise<void>;onChooseSource(fn:()=>void):()=>void;
     delete(id:string):Promise<boolean>;
     waveform(id:string,asset:string):Promise<import('../../../electron/video/waveform').Waveform>;
     importMedia(id:string,kind:'video'|'audio'):Promise<{project:VideoProject;asset:import('../../../electron/video/timeline').EditAsset}|undefined>;
