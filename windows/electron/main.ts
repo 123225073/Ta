@@ -788,6 +788,7 @@ async function createMainWindow(route = 'home') {
   }
   if (created) await loadRoute(mainWindow, route)
   if (process.platform === 'win32') mainWindow.setOpacity(1)
+  if (mainWindow.isMinimized()) mainWindow.restore()
   mainWindow.show()
   mainWindow.focus()
   return mainWindow
@@ -1527,6 +1528,13 @@ function registerHotkeys(settings: AppSettings) {
   globalShortcut.unregisterAll()
   const statuses: Record<string, boolean> = {}
   if (hotkeysSuspended) { videoController?.registerHotkeys(); return Object.fromEntries(Object.keys(settings.hotkeys).map((action) => [action, true])) }
+  for (const [action, accelerator, open] of [
+    ['openHome', 'Control+F1', () => showRoute('home')],
+    ['openVideo', 'Control+F2', () => videoController!.open()],
+  ] as const) {
+    try { statuses[action] = globalShortcut.register(accelerator, () => { void open().catch(error => console.warn('[window-shortcut]', error)) }) }
+    catch { statuses[action] = false }
+  }
   for (const [action, accelerator] of Object.entries(settings.hotkeys)) {
     if (!accelerator) {
       statuses[action] = true
@@ -1559,8 +1567,8 @@ function createTray() {
   tray.setToolTip('拓 Ta · AI 原生截图工具')
   const rebuild = () => {
     tray?.setContextMenu(Menu.buildFromTemplate([
-      { label: '打开拓 Ta', click: () => void showRoute('home') },
-      { label: '录屏与剪辑', click: () => void videoController?.open() },
+      { label: '打开拓 Ta', accelerator: 'Control+F1', click: () => void showRoute('home') },
+      { label: '录屏与剪辑', accelerator: 'Control+F2', click: () => void videoController?.open() },
       { type: 'separator' },
       { label: '通用截图', accelerator: store.getSettings().hotkeys.capture, click: () => void startCapture('capture') },
       { label: '极速取字', accelerator: store.getSettings().hotkeys.ocr, click: () => void startCapture('ocr') },

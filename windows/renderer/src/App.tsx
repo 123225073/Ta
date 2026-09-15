@@ -277,6 +277,8 @@ function SettingsPage({ settings, hotkeyStatus, onSave }: { settings?: AppSettin
               />
             })}</div>
             <p className="hotkey-help">Windows 默认：极速取字 Ctrl + Shift + 1，通用截图 Ctrl + Shift + 2，其余功能依次为 3–6。F1–F24 可单独使用；普通字母和数字需搭配 Ctrl、Alt、Shift 或 Win，避免影响日常输入。</p>
+            <p className="hotkey-help">全局唤起：Ctrl + F1 打开主页面，Ctrl + F2 打开录屏页面。关闭主窗口后仍可使用；从托盘彻底退出软件后不可用。</p>
+            {(hotkeyStatus.openHome === false || hotkeyStatus.openVideo === false) && <p className="hotkey-help" role="alert">{hotkeyStatus.openHome === false ? 'Ctrl + F1 ' : ''}{hotkeyStatus.openVideo === false ? 'Ctrl + F2 ' : ''}未能注册，可能已被其他软件或截图快捷键占用。请解除占用后重新保存设置。</p>}
           </section>
 
           <section id="capture" className="settings-panel">
