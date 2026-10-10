@@ -45,7 +45,7 @@ export class VideoController {
     this.bin=app.isPackaged?path.join(process.resourcesPath,'video'):path.resolve(__dirname,'../../resources/video')
     this.store=new VideoStore(path.join(app.getPath('userData'),'video'),path.join(app.getPath('videos'),'拓 Ta'))
     this.exporter=new VideoExporter(this.bin,this.store,p=>this.window?.webContents.send('video:export-progress',p))
-    this.recovery=this.recover()
+    this.recovery=this.recover().then(()=>this.exporter.sources.startAutomatic(()=>!this.active()&&!this.deleting))
     const sop=this.sop=new SopService(this.store,this.bin,ai,p=>this.window?.webContents.send('sop:progress',p))
     installSop(sop,e=>this.editor(e),()=>this.window,id=>this.exporter.sources.ensure(id))
     this.install();this.registerHotkeys()
@@ -53,7 +53,7 @@ export class VideoController {
     screen.on('display-removed',()=>{if(this.state.kind!=='audio')void this.pause(true,'显示器已断开，请检查录制范围。')})
   }
   active(){return this.state.phase!=='idle'}
-  async shutdown(){await this.stop();if(this.window&&!this.window.isDestroyed()){await new Promise<void>(resolve=>{this.closeDone=resolve;const w=this.window!;if(w.webContents.isLoadingMainFrame())w.webContents.once('did-finish-load',()=>w.webContents.send('video:closing'));else w.webContents.send('video:closing')})}this.quitting=true}
+  async shutdown(){await this.stop();await this.recovery;await this.exporter.sources.close();if(this.window&&!this.window.isDestroyed()){await new Promise<void>(resolve=>{this.closeDone=resolve;const w=this.window!;if(w.webContents.isLoadingMainFrame())w.webContents.once('did-finish-load',()=>w.webContents.send('video:closing'));else w.webContents.send('video:closing')})}this.quitting=true}
   private async recover(){for(const p of this.store.list().filter(p=>p.status==='recording')){if(p.kind==='audio'){try{const {stdout}=await exec(path.join(this.bin,'ffprobe.exe'),['-v','error','-show_format','-of','json',this.store.file(p.id,p.hasMic?'mic.wav':'system.wav')],{windowsHide:true,timeout:15000});p.duration=Math.max(1,Math.round(Number(JSON.parse(stdout).format.duration)*1000))}catch{}p.status='recovered';this.store.write(p);continue}try{const {stdout}=await exec(path.join(this.bin,'ffprobe.exe'),['-v','error','-show_streams','-show_format','-of','json',this.store.file(p.id,'screen.mp4')],{windowsHide:true,timeout:15000});const info=JSON.parse(stdout),v=info.streams.find((s:{codec_type:string})=>s.codec_type==='video');if(v){p.width=v.width;p.height=v.height;p.crop={x:0,y:0,width:v.width,height:v.height};p.duration=Math.max(1,Math.round(Number(info.format.duration)*1000))}}catch{}p.marks=p.marks.map(m=>({...m,end:Math.min(m.end,p.duration),points:m.points?.filter(pt=>pt.t===undefined||pt.t<=p.duration)})).filter(m=>m.end>m.start);p.status='recovered';this.store.write(p);if(!fs.existsSync(this.store.file(p.id,'thumbnail.jpg')))await exec(path.join(this.bin,'ffmpeg.exe'),['-v','error','-y','-i',this.store.file(p.id,'screen.mp4'),'-frames:v','1','-vf','scale=360:-2',this.store.file(p.id,'thumbnail.jpg')],{windowsHide:true,timeout:15000}).catch(()=>{})}}
   private trusted(event:IpcMainInvokeEvent){if(![this.window,this.hud,this.ink].some(w=>w&&!w.isDestroyed()&&w.webContents===event.sender)||event.senderFrame!==event.sender.mainFrame)throw Error('录屏窗口权限无效。')}
   private editor(event:IpcMainInvokeEvent){this.trusted(event);if(event.sender!==this.window?.webContents)throw Error('请在录屏编辑器执行此操作。')}
@@ -166,7 +166,7 @@ export class VideoController {
     handle('init',()=>{const projectId=this.cliProject,undoProject=this.cliUndo;this.cliProject=undefined;this.cliUndo=undefined;return {state:{...this.state,elapsed:this.elapsed(),marks:this.project?.marks},settings:this.store.settings,theme:this.theme(),projectId,undoProject}})
     handle('close-ready',e=>{this.editor(e);this.window?.destroy();this.closeDone?.();this.closeDone=undefined})
     handle('sources',(e)=>{this.editor(e);return this.getSources()});handle('microphones',()=>this.microphones())
-    handle('list',async()=>{await this.recovery;return this.store.list()});handle('get',async(e,id)=>{this.editor(e);await this.recovery;return this.store.get(id)})
+    handle('list',async()=>{await this.recovery;this.exporter.sources.enqueueMissing();return this.store.list()});handle('get',async(e,id)=>{this.editor(e);await this.recovery;return this.store.get(id)})
     handle('delete',async(e,id)=>{
       this.editor(e);await this.recovery;
       const check=()=>{if(this.active()||this.exporter.busy||this.exporter.sources.busy(id)||this.sop.busy(id))throw Error('请等待录制、导出或 AI 处理结束后再删除。')};

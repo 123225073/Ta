@@ -13,14 +13,36 @@ export function mediaName(title:string, audio=false){
 export class SourceMedia {
   private jobs=new Map<string,Promise<unknown>>()
   private progress=new Map<string,number>()
+  private queued=new Set<string>()
+  private errors=new Map<string,string>()
+  private automatic?:Promise<void>
+  private timer?:ReturnType<typeof setInterval>
+  private canPrepare=()=>true
+  private closing=false
   constructor(private bin:string,private store:VideoStore){}
-  busy(id:string){return this.jobs.has(id)}
+  busy(id:string){return this.jobs.has(id)||this.queued.has(id)}
+  startAutomatic(canPrepare=()=>true){
+    this.canPrepare=canPrepare;this.enqueueMissing()
+    this.timer??=setInterval(()=>this.pump(),1000);this.timer.unref()
+  }
+  enqueueMissing(){
+    if(this.closing)return
+    for(const p of this.store.list())if(p.status!=='recording'&&!this.errors.has(p.id)&&!this.state(p.id).ready&&!this.jobs.has(p.id))this.queued.add(p.id)
+    this.pump()
+  }
+  private pump(){
+    if(this.closing||this.automatic||!this.canPrepare())return
+    const id=this.queued.values().next().value as string|undefined;if(!id)return
+    this.queued.delete(id)
+    this.automatic=this.ensure(id).then(()=>{},()=>{}).finally(()=>{this.automatic=undefined;this.pump()})
+  }
+  async close(){this.closing=true;if(this.timer)clearInterval(this.timer);this.queued.clear();await this.automatic;await Promise.allSettled([...this.jobs.values()])}
   private serial<T>(id:string,fn:()=>Promise<T>):Promise<T>{
     const job=(this.jobs.get(id)??Promise.resolve()).catch(()=>{}).then(fn)
     this.jobs.set(id,job);void job.finally(()=>{if(this.jobs.get(id)===job)this.jobs.delete(id)}).catch(()=>{});return job
   }
-  state(id:string){const p=this.store.get(id),file=p.sourceFile?this.store.media(id,'source'):undefined;return{ready:!!file&&fs.existsSync(file),busy:this.busy(id),progress:this.progress.get(id)??0,file}}
-  ensure(id:string){return this.serial(id,()=>this.prepare(id))}
+  state(id:string){const p=this.store.get(id),file=p.sourceFile?this.store.media(id,'source'):undefined;return{ready:!!file&&fs.existsSync(file),busy:this.busy(id),queued:this.queued.has(id),error:this.errors.get(id),progress:this.progress.get(id)??0,file}}
+  ensure(id:string){this.queued.delete(id);this.errors.delete(id);return this.serial(id,()=>this.prepare(id)).catch(e=>{this.errors.set(id,e instanceof Error?e.message:String(e));throw e})}
   private async prepare(id:string){
     const p=this.store.get(id);if(p.status==='recording')throw Error('请等待录制结束。')
     const dir=path.join(this.store.directory(id),'原片');fs.mkdirSync(dir,{recursive:true})
