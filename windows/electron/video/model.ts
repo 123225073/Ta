@@ -6,6 +6,7 @@ export type MarkTool = 'rect' | 'arrow' | 'pen' | 'highlight' | 'text' | 'number
 export interface Mark extends Rect, Span { id: string; tool: MarkTool; color: string; stroke: number; text: string; fontSize?:number; rotation?:number; textDirection?:'horizontal'|'vertical'; textAutoSize?:boolean; highlightMode?:'spotlight'|'stroke'; dimOpacity?:number; enabled: boolean; points?: { x: number; y: number; t?: number }[] }
 export interface Zoom extends Span { id: string; scale: number; cx: number; cy: number }
 export interface VideoProject {
+  kind?:'audio'; sourceFile?:string;
   timeline?:Timeline; assets?:EditAsset[];
   schemaVersion: 1; id: string; title: string; createdAt: string; revision: number;
   width: number; height: number; duration: number; status: 'recording' | 'ready' | 'recovered';
@@ -13,8 +14,8 @@ export interface VideoProject {
   crop: Rect; micVolume: number; systemVolume: number; splits?:number[]; exports: { name: string; createdAt: string }[];
 }
 export interface RecordingSource { id: string; name: string; kind: 'screen' | 'window'; displayId: string; thumbnail: string; bounds?: Rect; physical?:Rect; scale: number }
-export interface RecordingOptions { sourceId: string; region?: Rect; mic: boolean; micName: string; system: boolean }
-export interface RecordingState { phase: 'idle' | 'starting' | 'recording' | 'paused' | 'stopping'; id?: string; elapsed: number; message?: string; bounds?: Rect; width?: number; height?: number; marks?: Mark[]; drawing?: boolean; switching?:boolean; choosingSource?:boolean; sourceName?:string; health?:import('./health').CaptureHealth }
+export interface RecordingOptions { kind?:'audio'; sourceId: string; region?: Rect; mic: boolean; micName: string; system: boolean }
+export interface RecordingState { kind?:'audio'; phase: 'idle' | 'starting' | 'recording' | 'paused' | 'stopping'; id?: string; elapsed: number; message?: string; bounds?: Rect; width?: number; height?: number; marks?: Mark[]; drawing?: boolean; switching?:boolean; choosingSource?:boolean; sourceName?:string; health?:import('./health').CaptureHealth }
 export interface VideoSettings { root: string; startKey: string; pauseKey: string; stopKey: string; annotateKey: string; system: boolean; mic: boolean; micName: string; countdown: number }
 export interface ExportProgress { id: string; phase: 'rendering' | 'done' | 'error' | 'canceled'; progress: number; message: string }
 export const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n))

@@ -666,6 +666,8 @@ void readCaptureCommands(CaptureControl& control, const std::function<void(bool)
     control.requestStop();
 }
 
+#include "ta_audio_only.h"
+
 } // namespace
 
 int wmain(int argc, wchar_t* wideArgv[]) {
@@ -722,6 +724,8 @@ int wmain(int argc, wchar_t* wideArgv[]) {
         std::cerr << "ERROR: Failed to parse config JSON" << std::endl;
         return 1;
     }
+
+    if(config.sourceType=="audio")return taRecordAudio(config);
 
     char injectDefaultSinkWriterFailure[2]{};
     const DWORD injectDefaultSinkWriterFailureLength = GetEnvironmentVariableA(

@@ -42,10 +42,11 @@ export class VideoCLI {
   constructor(private store:VideoStore,private bin:string,private exporter:VideoExporter){}
   async execute(r:CLIRequest):Promise<unknown> {
     if(r.command==='schema')return cliSchema
-    if(r.command==='list')return this.store.list().map(p=>({id:p.id,title:p.title,revision:p.revision,width:p.width,height:p.height,duration:p.duration,status:p.status}))
+    if(r.command==='list')return this.store.list().map(p=>({id:p.id,title:p.title,kind:p.kind??'video',revision:p.revision,width:p.width,height:p.height,duration:p.duration,status:p.status}))
     const p=this.store.get(r.projectId??'')
     if(p.status==='recording')throw Error('BUSY: recording in progress')
-    if(r.command==='inspect')return {...p,timeline:migrateTimeline(p)}
+    if(r.command==='inspect')return p.kind==='audio'?p:{...p,timeline:migrateTimeline(p)}
+    if(p.kind==='audio')throw Error('AUDIO_ONLY: 此项目是独立录音，请在素材库试听、重命名或另存 MP3。')
     if(r.command==='frame'){
       if(!Number.isFinite(r.time)||r.time!<0||r.time!>=p.duration)throw Error('FRAME_TIME: source time must be within video')
       const target=this.output(r.output,'.png'),temp=target+'.'+uid()+'.png'

@@ -2,6 +2,9 @@ import type { ExportProgress, Mark, RecordingOptions, RecordingSource, Recording
 export type * from '../../../electron/video/model'
 declare global {
   interface Window { taVideo: {
+    rename(id:string,title:string):Promise<VideoProject>;
+    sourceState(id:string):Promise<{ready:boolean;busy:boolean;progress:number;file?:string}>;
+    prepareSource(id:string):Promise<string>;
     saveSource(id:string):Promise<string|undefined>;
     chooseSource(show?:boolean):Promise<void>;switchSource(o:Pick<RecordingOptions,'sourceId'|'region'>):Promise<void>;onChooseSource(fn:()=>void):()=>void;
     delete(id:string):Promise<boolean>;

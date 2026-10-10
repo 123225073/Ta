@@ -35,6 +35,9 @@ contextBridge.exposeInMainWorld('taSop', {
   onProgress:(fn:Listener)=>subscribe('sop:progress',fn),
 })
 contextBridge.exposeInMainWorld('taVideo', {
+  rename:(id:string,title:string)=>ipcRenderer.invoke('video:rename',id,title),
+  sourceState:(id:string)=>ipcRenderer.invoke('video:source-state',id),
+  prepareSource:(id:string)=>ipcRenderer.invoke('video:prepare-source',id),
   saveSource:(id:string)=>ipcRenderer.invoke('video:save-source',id),
   chooseSource:(show=true)=>ipcRenderer.invoke('video:choose-source',show),
   switchSource:(o:unknown)=>ipcRenderer.invoke('video:switch-source',o),

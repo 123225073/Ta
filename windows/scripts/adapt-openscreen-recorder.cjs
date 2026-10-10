@@ -98,3 +98,5 @@ fs.writeFileSync(path.resolve(__dirname, '../native/openscreen-wgc/src/wgc_sessi
 require('./adapt-window-resize.cjs')
 
 require('./adapt-recording-resilience.cjs')
+
+require('./adapt-audio-only.cjs')

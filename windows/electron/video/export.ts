@@ -1,3 +1,4 @@
+import {SourceMedia} from './source-media'
 import { renderTimeline } from './timeline-export'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -6,20 +7,11 @@ import sharp from 'sharp'
 import { keepSegments,viewportAt,markSvg,type VideoProject,type ExportProgress } from './model'
 import { VideoStore } from './store'
 export class VideoExporter {
+  readonly sources:SourceMedia
   private child?:ChildProcess; private canceled=false; busy=false
-  constructor(private bin:string,private store:VideoStore,private notify:(p:ExportProgress)=>void){}
+  constructor(private bin:string,private store:VideoStore,private notify:(p:ExportProgress)=>void){this.sources=new SourceMedia(bin,store)}
   cancel(){this.canceled=true;this.child?.kill()}
-  async source(p:VideoProject,destination:string){
-    if(this.busy)throw Error('已有视频正在导出。');this.busy=true;this.canceled=false;
-    const job=path.join(this.store.directory(p.id),'exports','source-'+Date.now()),target=path.join(job,'source.mp4');fs.mkdirSync(job,{recursive:true});
-    try{const args=['-v','error','-i',this.store.file(p.id,'screen.mp4')],audio:string[]=[];
-      for(const [name,on] of [['system.wav',p.hasSystem],['mic.wav',p.hasMic]] as const)if(on){args.push('-i',this.store.file(p.id,name));audio.push(`[${audio.length+1}:a]`)}
-      if(audio.length)args.push('-filter_complex',`${audio.join('')}amix=inputs=${audio.length}:normalize=0,apad[a]`,'-map','0:v:0','-map','[a]','-c:a','aac','-b:a','192k');
-      else args.push('-map','0:v:0','-map','0:a?','-c:a','copy');
-      await this.run([...args,'-c:v','copy','-t',String(p.duration/1000),'-movflags','+faststart',target]);
-      await fs.promises.copyFile(target,destination,fs.constants.COPYFILE_EXCL);return destination;
-    }finally{this.busy=false}
-  }
+  source(p:VideoProject,destination:string){return this.sources.copy(p.id,destination)}
   private run(args:string[],progress?:(time:number)=>void):Promise<string>{
     return new Promise((resolve,reject)=>{
       const child=spawn(path.join(this.bin,'ffmpeg.exe'),args,{windowsHide:true});this.child=child

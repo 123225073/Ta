@@ -5,7 +5,7 @@ import { Readable } from 'node:stream'
 // Chromium needs byte ranges and a known file length to index fragmented MP4.
 export function mediaResponse(file:string, request:Request):Response {
   const size=fs.statSync(file).size
-  const headers:Record<string,string>={'Accept-Ranges':'bytes','Content-Type':({'.mp4':'video/mp4','.wav':'audio/wav','.png':'image/png','.jpg':'image/jpeg','.gif':'image/gif'} as Record<string,string>)[path.extname(file)]??'application/octet-stream'}
+  const headers:Record<string,string>={'Accept-Ranges':'bytes','Content-Type':({'.mp3':'audio/mpeg','.mp4':'video/mp4','.wav':'audio/wav','.png':'image/png','.jpg':'image/jpeg','.gif':'image/gif'} as Record<string,string>)[path.extname(file)]??'application/octet-stream'}
   let start=0,end=size-1,status=200
   const range=request.headers.get('range')
   if(range){
