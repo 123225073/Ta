@@ -50,7 +50,7 @@ export class VideoCLI {
     if(r.command==='frame'){
       if(!Number.isFinite(r.time)||r.time!<0||r.time!>=p.duration)throw Error('FRAME_TIME: source time must be within video')
       const target=this.output(r.output,'.png'),temp=target+'.'+uid()+'.png'
-      try{await exec(path.join(this.bin,'ffmpeg.exe'),['-v','error','-ss',String(r.time!/1000),'-i',this.store.file(p.id,'screen.mp4'),'-frames:v','1',temp],{windowsHide:true,timeout:30000});fs.copyFileSync(temp,target,fs.constants.COPYFILE_EXCL)}finally{if(fs.existsSync(temp))fs.unlinkSync(temp)}
+      try{await exec(path.join(this.bin,'ffmpeg.exe'),['-v','error','-ss',String(r.time!/1000),'-i',this.store.media(p.id,'screen.mp4'),'-frames:v','1',temp],{windowsHide:true,timeout:30000});fs.copyFileSync(temp,target,fs.constants.COPYFILE_EXCL)}finally{if(fs.existsSync(temp))fs.unlinkSync(temp)}
       return {file:target,sourceTime:r.time,width:p.width,height:p.height}
     }
     if(r.revision!==p.revision)throw Error(`REVISION_CONFLICT: expected ${p.revision}, inspect again`)

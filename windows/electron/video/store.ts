@@ -7,7 +7,7 @@ export class VideoStore {
   settings:VideoSettings
   constructor(private metadata:string,defaultRoot:string){
     fs.mkdirSync(metadata,{recursive:true})
-    this.settings={root:defaultRoot,startKey:'Ctrl+Shift+7',pauseKey:'Ctrl+Shift+8',stopKey:'Ctrl+Shift+9',annotateKey:'Ctrl+Shift+0',mic:false,system:false,micName:'',countdown:3}
+    this.settings={root:defaultRoot,startKey:'Ctrl+Shift+7',pauseKey:'Ctrl+Shift+8',stopKey:'Ctrl+Shift+9',annotateKey:'Ctrl+Shift+0',mic:false,system:false,micName:'',countdown:3,retainOriginals:false}
     try{this.index=JSON.parse(fs.readFileSync(path.join(metadata,'index.json'),'utf8'))}catch{}
     try{this.settings={...this.settings,...JSON.parse(fs.readFileSync(path.join(metadata,'settings.json'),'utf8'))}}catch{}
   }
@@ -24,13 +24,24 @@ export class VideoStore {
   saveSettings(s:VideoSettings){this.settings=s;this.atomic(path.join(this.metadata,'settings.json'),s)}
   directory(id:string){if(!/^\d{13}-[a-f0-9]{8}$/.test(id)||!Object.hasOwn(this.index,id))throw Error('录屏项目不存在。');return this.index[id]}
   file(id:string,name:string){if(!['screen.mp4','system.wav','mic.wav','project.json','thumbnail.jpg'].includes(name))throw Error('媒体类型无效。');return path.join(this.directory(id),name)}
-  media(id:string,name:string){if(name==='source'){const p=this.get(id),file=p.sourceFile;if(!file||path.basename(file)!==file||/[\\/]/.test(file)||!file.endsWith(p.kind==='audio'?'.mp3':'.mp4'))throw Error('原片尚未保存完成。');return path.join(this.directory(id),'原片',file)} if(/^edit-[a-f0-9]{16}\.(mp4|wav)$/.test(name)&&this.get(id).assets?.some(a=>a.file===name))return path.join(this.directory(id),name);return this.file(id,name)}
+  media(id:string,name:string):string{if(name==='source'){const p=this.get(id),file=p.sourceFile;if(!file||path.basename(file)!==file||/[\\/]/.test(file)||!file.endsWith(p.kind==='audio'?'.mp3':'.mp4'))throw Error('原片尚未保存完成。');return path.join(this.directory(id),'原片',file)} if(name==='screen.mp4'&&this.get(id).sourceTracks!==undefined)return this.media(id,'source');if(/^edit-[a-f0-9]{16}\.(mp4|wav)$/.test(name)&&this.get(id).assets?.some(a=>a.file===name))return path.join(this.directory(id),name);return this.file(id,name)}
+  input(id:string,name:string):{file:string;stream:string}{
+    const p=this.get(id),key=name==='mic.wav'?'mic':name==='system.wav'?'system':undefined;
+    if(key&&p.sourceTracks!==undefined){
+      const raw=this.file(id,name);if(p.retainOriginals&&fs.existsSync(raw))return{file:raw,stream:'a:0'};
+      const n=p.sourceTracks[key];if(!Number.isInteger(n)||n!<0||n!>16)throw Error('没有可用的独立音轨。');
+      let file=this.media(id,'source');if(p.audioArchive){if(path.basename(p.audioArchive)!==p.audioArchive||/[\\/]/.test(p.audioArchive)||!p.audioArchive.endsWith('.m4a'))throw Error('音轨文件无效。');file=path.join(this.directory(id),'原片',p.audioArchive)}
+      return{file,stream:String(n)}
+    }
+    return{file:this.media(id,name),stream:key?'a:0':'v:0'}
+  }
+  audioStream(id:string,name:string){return ['mic.wav','system.wav'].includes(name)?this.input(id,name).stream:'a:0'}
   create(width:number,height:number,hasMic:boolean,hasSystem:boolean){
     const id=Date.now()+'-'+crypto.randomBytes(4).toString('hex'), date=new Date()
     const dir=path.join(this.settings.root,String(date.getFullYear()),String(date.getMonth()+1).padStart(2,'0'),String(date.getDate()).padStart(2,'0'),id)
     fs.mkdirSync(dir,{recursive:true});this.index[id]=dir;this.atomic(path.join(this.metadata,'index.json'),this.index)
     const p:VideoProject={schemaVersion:1,id,title:`录屏 ${date.toLocaleString('zh-CN')}`,createdAt:date.toISOString(),revision:0,width,height,duration:1,status:'recording',hasMic,hasSystem,marks:[],cuts:[],mutes:[],zooms:[],crop:{x:0,y:0,width,height},micVolume:1,systemVolume:1,exports:[]}
-    this.write(p);return p
+    p.retainOriginals=this.settings.retainOriginals===true;this.write(p);return p
   }
   get(id:string):VideoProject{const file=this.file(id,'project.json');try{return JSON.parse(fs.readFileSync(file,'utf8'))}catch{try{return JSON.parse(fs.readFileSync(file+'.backup','utf8'))}catch{throw Error('项目文件无法读取。原始录像仍保留在保存目录。')}}}
   write(p:VideoProject){this.atomic(this.file(p.id,'project.json'),p)}

@@ -7,7 +7,7 @@
 ### 框住它，拓下来。
 
 [![Windows](https://img.shields.io/badge/Windows-10%2F11-1676D2.svg)](./windows/README.md)
-[![Version](https://img.shields.io/badge/Windows-v1.12.1-FF4D37.svg)](./docs/release-notes-v1.12.1.md)
+[![Version](https://img.shields.io/badge/Windows-v1.13.0-FF4D37.svg)](./docs/release-notes-v1.13.0.md)
 [![Electron](https://img.shields.io/badge/Electron-44-47848F.svg)](./windows/package.json)
 [![License](https://img.shields.io/badge/License-MIT-D6402F.svg)](./LICENSE)
 
@@ -23,9 +23,9 @@
 
 Windows 版不是把 macOS 程序套壳运行，而是针对 Windows 重新实现了屏幕捕获、DPI、多显示器、全局快捷键、托盘、剪贴板、安全存储、安装和窗口生命周期。
 
-## Windows v1.12.1 能做什么
+## Windows v1.13.0 能做什么
 
-- **原片与录音**：录屏自动保存带声音的 MP4，旧录像也会自动排队补生成；支持直接定位文件、重命名和快速另存。独立录音自动保存 MP3，可试听、暂停/继续。录制时间与名称分开管理。详见 [1.12.1 使用说明](./docs/release-notes-v1.12.1.md)。
+- **原片与录音**：录屏自动保存包含独立声音的单个 MP4，默认清理大体积底稿；支持直接定位文件、重命名和快速另存。独立录音自动保存 MP3，可试听、暂停/继续。录制时间与名称分开管理。详见 [1.13.0 使用说明](./docs/release-notes-v1.13.0.md)。
 
 - **录屏与剪辑**：全屏、窗口、自选区域录制，暂停/继续，麦克风与系统音独立保存；录后剪切片段、裁剪、局部放大，添加或修改标记，并选择哪些标记融入 MP4。标记随画面缩放和裁剪保持对齐。详见 [1.4.0 使用说明](./docs/release-notes-v1.4.0.md)。
 

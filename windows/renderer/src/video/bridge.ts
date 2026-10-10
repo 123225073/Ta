@@ -3,7 +3,7 @@ export type * from '../../../electron/video/model'
 declare global {
   interface Window { taVideo: {
     rename(id:string,title:string):Promise<VideoProject>;
-    sourceState(id:string):Promise<{ready:boolean;busy:boolean;queued:boolean;error?:string;progress:number;file?:string}>;
+    sourceState(id:string):Promise<{ready:boolean;busy:boolean;queued:boolean;error?:string;progress:number;file?:string;tracks?:{mic?:number;system?:number};retainOriginals?:boolean}>;
     prepareSource(id:string):Promise<string>;
     saveSource(id:string):Promise<string|undefined>;
     chooseSource(show?:boolean):Promise<void>;switchSource(o:Pick<RecordingOptions,'sourceId'|'region'>):Promise<void>;onChooseSource(fn:()=>void):()=>void;

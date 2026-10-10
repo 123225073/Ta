@@ -1,7 +1,7 @@
 const fs=require('fs'),path=require('path'),{execFile}=require('child_process'),{promisify}=require('util'),sharp=require('sharp');const exec=promisify(execFile)
 const {VideoStore}=require('../dist-electron/video/store'),{migrateTimeline,splitLinked,resizeSpeed,replaceLinked,makeClip}=require('../dist-electron/video/timeline'),{renderTimeline}=require('../dist-electron/video/timeline-export'),{importTimelineMedia}=require('../dist-electron/video/import-media')
 const out=path.resolve(__dirname,'../output/timeline-render-'+Date.now()),bin=path.resolve(__dirname,'../resources/video');fs.mkdirSync(out,{recursive:true})
-const assert=(v,m)=>{if(!v)throw Error(m)},run=async(args)=>{try{return (await exec(path.join(bin,'ffmpeg.exe'),args,{windowsHide:true,timeout:120000,maxBuffer:8*1024*1024})).stdout}catch(e){throw Error(e.stderr||e.message)}}
+const assert=(v,m)=>{if(!v)throw Error(m)},run=async(args,_progress,input)=>{try{const result=exec(path.join(bin,'ffmpeg.exe'),args,{windowsHide:true,timeout:120000,maxBuffer:8*1024*1024});if(input!==undefined){result.child.stdin.on('error',()=>{});result.child.stdin.end(input)}return (await result).stdout}catch(e){throw Error(e.stderr||e.message)}}
 async function main(){
  const store=new VideoStore(path.join(out,'index'),path.join(out,'projects')),p=store.create(640,360,true,false);p.duration=6000;p.status='ready';store.write(p)
  await run(['-v','error','-f','lavfi','-i','color=c=red:s=640x360:r=30:d=6','-vf','drawbox=x=320:y=0:w=320:h=360:color=blue:t=fill','-c:v','h264_mf','-b:v','3000000',store.file(p.id,'screen.mp4')]);await run(['-v','error','-f','lavfi','-i','sine=frequency=440:duration=6','-ac','2',store.file(p.id,'mic.wav')])

@@ -5,6 +5,10 @@ import path from 'node:path'
 import {SourceMedia,mediaName} from './source-media'
 import {VideoStore} from './store'
 describe('ready originals',()=>{
+ it('reads compact track indexes without raw WAV files, retains lossless inputs only when requested and rejects unsafe indexes',()=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'ta-inputs-'));try{const store=new VideoStore(path.join(root,'meta'),path.join(root,'media')),p=store.create(640,480,true,true);p.status='ready';p.sourceFile='原片.mp4';p.sourceTracks={mic:3,system:2};store.write(p);expect(store.media(p.id,'screen.mp4')).toBe(store.media(p.id,'source'));expect(store.input(p.id,'mic.wav')).toEqual({file:store.media(p.id,'source'),stream:'3'});expect(store.audioStream(p.id,'system.wav')).toBe('2');fs.writeFileSync(store.file(p.id,'mic.wav'),'lossless');expect(store.input(p.id,'mic.wav').stream).toBe('3');p.retainOriginals=true;store.write(p);expect(store.input(p.id,'mic.wav').file).toBe(store.file(p.id,'mic.wav'));p.retainOriginals=false;p.sourceTracks.mic=999;store.write(p);expect(()=>store.input(p.id,'mic.wav')).toThrow('独立音轨')}
+  finally{fs.rmSync(root,{recursive:true,force:true})}
+ })
  it('automatically queues missing originals once, skips active and ready projects, and defers during recording',async()=>{
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'ta-source-queue-')),store=new VideoStore(path.join(root,'meta'),path.join(root,'media')),service=new SourceMedia('',store);let recording=true,running=0,peak=0;
   try{

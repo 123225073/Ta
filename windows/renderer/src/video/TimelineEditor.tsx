@@ -99,7 +99,7 @@ function NumberField({label,value,onCommit}:{label:string;value:number;onCommit:
 }
 function ClipPreview({p,clip:c,kind,time,playing,interactive,selected,editing,onSelect,onEdit,onMark}:{p:Project;clip:TimelineClip;kind:TrackKind;time:number;playing:boolean;interactive:boolean;selected:boolean;editing:boolean;onSelect:()=>void;onEdit:(v:boolean)=>void;onMark:(m:NonNullable<TimelineClip['mark']>)=>void}){
   const el=useRef<HTMLVideoElement&HTMLAudioElement>(null),source=clipSourceTime(c,time)/1000,key=keyAt(c,time-c.start),cx=clamp(key.cx,.5/key.scale,1-.5/key.scale),cy=clamp(key.cy,.5/key.scale,1-.5/key.scale)
-  const sync=()=>{const v=el.current;if(!v)return;v.playbackRate=c.speed;v.volume=Math.min(1,c.volume);if(v.readyState>=1&&Math.abs(v.currentTime-source)>(playing?.18:.02))v.currentTime=source;if(playing){if(v.paused)void v.play().catch(()=>{})}else v.pause()}
+  const sync=()=>{const v=el.current;if(!v)return;v.playbackRate=c.speed;v.volume=Math.min(1,c.volume);v.muted=kind==='video'&&c.asset==='screen.mp4';if(v.readyState>=1&&Math.abs(v.currentTime-source)>(playing?.18:.02))v.currentTime=source;if(playing){if(v.paused)void v.play().catch(()=>{})}else v.pause()}
   useEffect(sync,[time,playing,c.speed,c.volume,c.asset]);useEffect(()=>()=>{el.current?.pause()},[])
   if(kind==='audio')return <audio ref={el} src={media(p.id,c.asset)} onLoadedMetadata={sync}/>
   const style={left:c.rect.x*100+'%',top:c.rect.y*100+'%',width:c.rect.width*100+'%',height:c.rect.height*100+'%'}

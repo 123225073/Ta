@@ -38,7 +38,7 @@ export function installSop(service:SopService, editor:(e:IpcMainInvokeEvent)=>vo
   handle('versions',id=>service.versions(id))
   handle('restore',(id,revision)=>service.restore(id,revision))
   handle('transform',(id,image,mode,rect)=>service.transform(id,image,mode,rect))
-  handle('import-video',async()=>{const r=await dialog.showOpenDialog(window()!,{title:'导入视频生成 SOP',properties:['openFile'],filters:[{name:'视频',extensions:['mp4','mkv','mov','webm','avi']}]});if(!r.canceled){const p=await service.importVideo(r.filePaths[0]);await prepare?.(p.id);return p}})
+  handle('import-video',async()=>{const r=await dialog.showOpenDialog(window()!,{title:'导入视频生成 SOP',properties:['openFile'],filters:[{name:'视频',extensions:['mp4','mkv','mov','webm','avi']}]});if(!r.canceled){const p=await service.importVideo(r.filePaths[0]);await prepare?.(p.id);return service.project(p.id)}})
   handle('image',async(id,paste)=>{if(paste===true){const items=await clipboard.read();for(const item of items){const type=item.types.find(t=>t.startsWith('image/'));if(type){const blob=await item.getType(type);if(blob instanceof Blob)return service.upload(id,Buffer.from(await blob.arrayBuffer()))}}throw Error('剪贴板中没有图片。')}
     const r=await dialog.showOpenDialog(window()!,{title:'添加补充截图',properties:['openFile'],filters:[{name:'图片',extensions:['png','jpg','jpeg','webp']}]});if(!r.canceled){if(fs.statSync(r.filePaths[0]).size>30*1024*1024)throw Error('图片不能超过 30 MB。');return service.upload(id,fs.readFileSync(r.filePaths[0]))}})
   handle('subtitles',async id=>{const r=await dialog.showOpenDialog(window()!,{title:'导入讲解字幕',properties:['openFile'],filters:[{name:'字幕',extensions:['srt','vtt']}]});if(r.canceled)return

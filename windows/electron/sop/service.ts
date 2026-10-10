@@ -18,6 +18,7 @@ const SYSTEM = `你是操作教学文档编辑。用中文输出清晰、可执�
 export class SopService {
   private jobs = new Map<string, AbortController>()
   constructor(private store:VideoStore, private bin:string, private context:AIContext, private progress:(p:SopProgress)=>void) {}
+  project(id:string){return this.store.get(id)}
   asset(id:string, file:string) { if(!assetPattern.test(file)) throw Error('配图文件名无效。'); return path.join(this.store.directory(id),file) }
   private file(id:string) { return path.join(this.store.directory(id),'sop.json') }
   get(id:string):SopDocument {
@@ -63,10 +64,10 @@ export class SopService {
     const p=this.store.get(id),d=this.get(id),source=p.hasMic?'mic.wav':p.hasSystem?'system.wav':null
     if(!source)throw Error('这段视频没有录音，可以直接用画面生成 SOP。')
     const base=context.profile.baseUrl.replace(/\/+$/,'').replace(/\/chat\/completions$/,'')
-    const lines:SopDocument['transcript']=[]
+    const lines:SopDocument['transcript']=[],input=p.sourceTracks===undefined?this.store.input(id,source):{file:this.store.media(id,'source'),stream:'a:0'}
     for(let t=0;t<p.duration;t+=240000){signal.throwIfAborted();this.report(id,'正在转写讲解录音',t,p.duration)
       const file=path.join(this.store.directory(id),`sop-audio-${uid()}.wav`)
-      try{await this.ffmpeg(['-v','error','-ss',String(t/1000),'-i',this.store.file(id,source),'-t','240','-ac','1','-ar','16000',file],signal)
+      try{await this.ffmpeg(['-v','error','-ss',String(t/1000),'-i',input.file,'-map','0:'+input.stream,'-t','240','-ac','1','-ar','16000',file],signal)
         const form=new FormData();form.append('file',new Blob([new Uint8Array(fs.readFileSync(file))],{type:'audio/wav'}),'audio.wav');form.append('model',model);form.append('response_format','verbose_json');form.append('language','zh')
         const res=await fetch(base+'/audio/transcriptions',{method:'POST',headers:{Authorization:`Bearer ${context.apiKey}`},body:form,signal:AbortSignal.any([signal,AbortSignal.timeout(120000)]),redirect:'error'})
         if(!res.ok)throw Error(`语音转写失败（HTTP ${res.status}），请检查服务是否提供 ${model}；也可导入字幕。`)
@@ -91,7 +92,7 @@ export class SopService {
   async frame(id:string, time:number, signal?:AbortSignal):Promise<SopImage> {
     const p=this.store.get(id);if(!Number.isFinite(time)||time<0||time>p.duration)throw Error('截图时间超出视频范围。')
     const file=`sop-${uid()}.jpg`
-    await this.ffmpeg(['-v','error','-ss',String(Math.min(time,Math.max(0,p.duration-100))/1000),'-i',this.store.file(id,'screen.mp4'),'-frames:v','1','-vf','scale=1920:1920:force_original_aspect_ratio=decrease','-q:v','2',this.asset(id,file)],signal)
+    await this.ffmpeg(['-v','error','-ss',String(Math.min(time,Math.max(0,p.duration-100))/1000),'-i',this.store.media(id,'screen.mp4'),'-frames:v','1','-vf','scale=1920:1920:force_original_aspect_ratio=decrease','-q:v','2',this.asset(id,file)],signal)
     if(!fs.existsSync(this.asset(id,file)))throw Error('此处没有可提取的视频帧。')
     return{id:uid(),file,time,caption:'',source:'video'}
   }
@@ -120,7 +121,7 @@ export class SopService {
     const interval=range?Math.max(500,(end-start)/24):Math.max(2000,(end-start)/180)
     const times=new Set<number>();for(let t=start;t<end;t+=interval)times.add(Math.round(t));times.add(Math.max(start,end-150))
     // Include changed screens so a brief dialog is not lost between regular samples.
-    if(!range){const {stderr}=await this.ffmpeg(['-v','info','-i',this.store.file(id,'screen.mp4'),'-vf',"fps=4,select='gt(scene,0.14)',showinfo",'-an','-f','null','-'],signal,180000)
+    if(!range){const {stderr}=await this.ffmpeg(['-v','info','-i',this.store.media(id,'screen.mp4'),'-vf',"fps=4,select='gt(scene,0.14)',showinfo",'-an','-f','null','-'],signal,180000)
       const changes=[...stderr.matchAll(/pts_time:([\d.]+)/g)].map(m=>Math.round(Number(m[1])*1000)).filter(t=>t>=start&&t<end)
       for(const t of changes.slice(0,120))times.add(t)
     }

@@ -12,9 +12,10 @@ export class VideoExporter {
   constructor(private bin:string,private store:VideoStore,private notify:(p:ExportProgress)=>void){this.sources=new SourceMedia(bin,store)}
   cancel(){this.canceled=true;this.child?.kill()}
   source(p:VideoProject,destination:string){return this.sources.copy(p.id,destination)}
-  private run(args:string[],progress?:(time:number)=>void):Promise<string>{
+  private run(args:string[],progress?:(time:number)=>void,input?:string):Promise<string>{
     return new Promise((resolve,reject)=>{
       const child=spawn(path.join(this.bin,'ffmpeg.exe'),args,{windowsHide:true});this.child=child
+      if(input!==undefined){child.stdin?.on('error',()=>{});child.stdin?.end(input)}
       let log='',line='';child.stdout?.on('data',d=>{line+=d;const lines=line.split('\n');line=lines.pop()??'';for(const l of lines)if(l.startsWith('out_time_us='))progress?.(Number(l.split('=')[1])/1000)})
       child.stderr?.on('data',d=>{log=(log+d).slice(-6000)})
       child.on('error',reject);child.on('close',code=>{if(this.child===child)this.child=undefined;code===0&&!this.canceled?resolve(log):reject(Error(this.canceled?'已取消导出。':log.slice(-1800)||'编码失败。'))})
@@ -23,11 +24,11 @@ export class VideoExporter {
   async export(p:VideoProject,destination:string,maxHeight:number){
     if(this.busy)throw Error('已有视频正在导出。');this.busy=true;this.canceled=false
     const job=path.join(this.store.directory(p.id),'exports',Date.now().toString());fs.mkdirSync(job,{recursive:true})
-    const target=path.join(job,'finished.mp4'),full=path.join(this.store.directory(p.id),'screen.mp4')
+    const target=path.join(job,'finished.mp4'),full=this.store.media(p.id,'screen.mp4')
     const scale=Math.min(1,maxHeight/p.crop.height), w=Math.max(2,Math.floor(p.crop.width*scale/2)*2),h=Math.max(2,Math.floor(p.crop.height*scale/2)*2)
     try{
       this.notify({id:p.id,phase:'rendering',progress:0,message:'正在准备编码器'})
-      if(p.timeline){await renderTimeline(p,job,target,maxHeight,file=>this.store.media(p.id,file),(a,progress)=>this.run(a,progress),()=>this.canceled,(progress,message)=>this.notify({id:p.id,phase:'rendering',progress,message}));if(this.canceled)throw Error('已取消导出。');fs.copyFileSync(target,destination,fs.constants.COPYFILE_EXCL);const current=this.store.get(p.id);current.exports.push({name:destination,createdAt:new Date().toISOString()});this.store.write(current);this.notify({id:p.id,phase:'done',progress:1,message:'视频已导出'});return destination}
+      if(p.timeline){await renderTimeline(p,job,target,maxHeight,file=>this.store.input(p.id,file).file,(a,progress,input)=>this.run(a,progress,input),()=>this.canceled,(progress,message)=>this.notify({id:p.id,phase:'rendering',progress,message}),file=>this.store.audioStream(p.id,file));if(this.canceled)throw Error('已取消导出。');fs.copyFileSync(target,destination,fs.constants.COPYFILE_EXCL);const current=this.store.get(p.id);current.exports.push({name:destination,createdAt:new Date().toISOString()});this.store.write(current);this.notify({id:p.id,phase:'done',progress:1,message:'视频已导出'});return destination}
       let encoder=''
       for(const name of ['h264_mf','h264_qsv','h264_nvenc','h264_amf']){
         if(this.canceled)throw Error('已取消导出。')
@@ -62,7 +63,7 @@ export class VideoExporter {
       // effect slice would accumulate encoder padding and cause sync drift.
       const mux=['-v','error','-f','concat','-safe','1','-i',path.join(job,'concat.txt')],af:string[]=[],audioNames:string[]=[]
       let input=1
-      for(const [name,enabled,volume] of [['system.wav',p.hasSystem,p.systemVolume],['mic.wav',p.hasMic,p.micVolume]] as const){if(enabled){mux.push('-i',this.store.file(p.id,name));af.push(`[${input++}:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,asetpts=PTS-STARTPTS,volume=${volume},apad[a${audioNames.length}]`);audioNames.push(`[a${audioNames.length}]`)}}
+      for(const [name,enabled,volume] of [['system.wav',p.hasSystem,p.systemVolume],['mic.wav',p.hasMic,p.micVolume]] as const){if(enabled){mux.push('-i',this.store.input(p.id,name).file);af.push(`[${input++}:${this.store.audioStream(p.id,name)}]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,asetpts=PTS-STARTPTS,volume=${volume},apad[a${audioNames.length}]`);audioNames.push(`[a${audioNames.length}]`)}}
       if(!audioNames.length){mux.push('-f','lavfi','-i','anullsrc=r=48000:cl=stereo');af.push(`[${input}:a]anull[a0]`);audioNames.push('[a0]')}
       const mute=p.mutes.length?`,volume=0:enable='${p.mutes.map(s=>`between(t,${s.start/1000},${s.end/1000})`).join('+')}'`:''
       af.push(`${audioNames.join('')}amix=inputs=${audioNames.length}:normalize=0${mute},asplit=${kept.length}${kept.map((_,i)=>`[split${i}]`).join('')}`)
