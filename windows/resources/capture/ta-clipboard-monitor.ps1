@@ -816,5 +816,10 @@ namespace TaClipboardMonitor
 }
 '@
 
-Add-Type -TypeDefinition $source -ReferencedAssemblies @('System.Windows.Forms', 'System.Drawing')
+$compiledHelper = Join-Path $PSScriptRoot 'ta-clipboard-monitor.dll'
+if (Test-Path -LiteralPath $compiledHelper) {
+  Add-Type -Path $compiledHelper
+} else {
+  Add-Type -TypeDefinition $source -ReferencedAssemblies @('System.Windows.Forms', 'System.Drawing')
+}
 [TaClipboardMonitor.Program]::Run()

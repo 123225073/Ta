@@ -62,7 +62,7 @@ function TitleBar({ page, version, theme, themeBusy, onNavigate, onThemeToggle }
 }) {
   return (
     <header className="titlebar">
-      <div className="brand" title="按住这里拖动窗口"><img src="./icon.png" alt="拓" /><span><b>拓 Ta</b><small>Windows · v{version}</small></span></div>
+      <div className="brand" title="风沙 · 拓 — 按住这里拖动窗口"><img src="./icon.png" alt="拓" /><span><b>风沙 · 拓</b><small>CAPTURE STUDIO · v{version}</small></span></div>
       <nav>
         <button className={page === 'home' ? 'active' : ''} onClick={() => onNavigate('home')}>工作台</button>
         <button className={page === 'library' ? 'active' : ''} onClick={() => onNavigate('library')}>素材库</button>
@@ -159,15 +159,16 @@ function Home({ history, hotkeys, onCapture, onOpenHistory, onDeleteHistory, onL
     <div className="page home-page">
       <section className="hero">
         <div className="hero-copy">
-          <div className="eyebrow"><span /> AI 原生截图工具 · Windows</div>
-          <h1>框住它，<em>拓下来。</em></h1>
-          <p>截图、取字、翻译、钉图与标注，不再散落在五六个软件里。</p>
+          <div className="eyebrow"><span /> FENGSHA / CAPTURE STUDIO</div>
+          <h1>捕捉此刻，<em>留住灵感。</em></h1>
+          <p>截图、录屏、声音与操作指引。把每一次记录，变成可用的素材。</p>
           <div className="hero-actions">
             <button className="capture-button" onClick={() => onCapture('capture')}><span>⌗</span><b>开始截图</b><kbd>{formatAccelerator(hotkeys?.capture ?? windowsDefaultHotkeys.capture) || '未启用'}</kbd></button>
+            <button className="quiet-button home-record-button" onClick={() => void window.taVideo.open()}>开始录屏 <kbd>Ctrl + F2</kbd></button>
             <button className="quiet-button" onClick={() => onCapture('ocr')}>极速取字</button>
           </div>
         </div>
-        <div className="hero-mark" aria-hidden="true"><span>拓</span><i>TA · WINDOWS</i></div>
+        <div className="hero-mark" aria-hidden="true"><span>拓</span><i>FENGSHA · CREATE & KEEP</i></div>
       </section>
 
       <section className="section actions-section">

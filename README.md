@@ -2,12 +2,12 @@
 
 <img src="./Resources/Brand/Ta-AppIcon.png" width="112" alt="拓 Ta">
 
-# 拓 Ta · Windows 截图工具
+# 风沙 · 拓 · Windows 创作工作台
 
-### 框住它，拓下来。
+### 捕捉此刻，留住灵感。
 
 [![Windows](https://img.shields.io/badge/Windows-10%2F11-1676D2.svg)](./windows/README.md)
-[![Version](https://img.shields.io/badge/Windows-v1.13.0-FF4D37.svg)](./docs/release-notes-v1.13.0.md)
+[![Version](https://img.shields.io/badge/Windows-v1.14.0-FF4D37.svg)](./docs/release-notes-v1.14.0.md)
 [![Electron](https://img.shields.io/badge/Electron-44-47848F.svg)](./windows/package.json)
 [![License](https://img.shields.io/badge/License-MIT-D6402F.svg)](./LICENSE)
 
@@ -23,7 +23,9 @@
 
 Windows 版不是把 macOS 程序套壳运行，而是针对 Windows 重新实现了屏幕捕获、DPI、多显示器、全局快捷键、托盘、剪贴板、安全存储、安装和窗口生命周期。
 
-## Windows v1.13.0 能做什么
+## Windows v1.14.0 能做什么
+
+- **更轻快的工作台**：录屏、素材、剪辑和 SOP 统一风沙主题；按名称搜索、视频/录音分类；减少素材状态查询、时间线重绘和播放器重复创建。详见 [1.14.0 更新说明](./docs/release-notes-v1.14.0.md)。
 
 - **原片与录音**：录屏自动保存包含独立声音的单个 MP4，默认清理大体积底稿；支持直接定位文件、重命名和快速另存。独立录音自动保存 MP3，可试听、暂停/继续。录制时间与名称分开管理。详见 [1.13.0 使用说明](./docs/release-notes-v1.13.0.md)。
 

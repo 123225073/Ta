@@ -1,20 +1,21 @@
 {
   "name": "ta-windows",
-  "version": "1.13.0",
+  "version": "1.14.0",
   "private": true,
   "description": "拓（Ta）AI 原生截图工具 Windows 客户端",
   "author": "Ta contributors",
   "license": "MIT",
   "main": "dist-electron/main.js",
   "scripts": {
-    "dev": "npm run prepare:assets && concurrently -k \"vite --host 127.0.0.1\" \"tsc -p electron/tsconfig.json --watch\" \"wait-on tcp:5173 dist-electron/main.js && cross-env TA_DEV_SERVER_URL=http://127.0.0.1:5173 electron .\"",
+    "dev": "npm run prepare:assets && npm run build:capture && concurrently -k \"vite --host 127.0.0.1\" \"tsc -p electron/tsconfig.json --watch\" \"wait-on tcp:5173 dist-electron/main.js && cross-env TA_DEV_SERVER_URL=http://127.0.0.1:5173 electron .\"",
     "prepare:assets": "node scripts/prepare-assets.cjs",
     "typecheck": "tsc -p electron/tsconfig.json --noEmit && tsc -p tsconfig.json --noEmit",
-    "build": "npm run prepare:assets && tsc -p electron/tsconfig.json && vite build",
+    "build": "npm run prepare:assets && npm run build:capture && tsc -p electron/tsconfig.json && vite build",
+    "build:capture": "pwsh -NoProfile -File scripts/build-capture-helpers.ps1",
     "test": "vitest run --config vitest.config.mts",
     "test:preview-fidelity": "node scripts/regression-preview-fidelity.cjs",
     "test:watch": "vitest --config vitest.config.mts",
-    "dist": "npm run verify:video-assets && npm run test && npm run test:preview-fidelity && npm run typecheck && npm run build && electron-builder --win nsis",
+    "dist": "npm run verify:video-assets && npm run test && npm run typecheck && npm run build && npm run test:preview-fidelity && electron-builder --win nsis",
     "smoke": "node scripts/smoke.cjs",
     "smoke:e2e": "node scripts/e2e-smoke.cjs",
     "smoke:clipboard": "node scripts/clipboard-monitor-smoke.cjs",
@@ -24,7 +25,8 @@
     "prepare:video": "node scripts/prepare-video.cjs",
     "smoke:video": "node scripts/run-video-check.cjs video-capture-probe.cjs && node scripts/run-video-check.cjs video-ui-smoke.cjs",
     "verify:video-assets": "node scripts/verify-video-assets.cjs",
-    "smoke:sop": "node scripts/run-video-check.cjs sop-ui-smoke.cjs"
+    "smoke:sop": "node scripts/run-video-check.cjs sop-ui-smoke.cjs",
+    "smoke:experience": "cross-env TA_EXPERIENCE_ASSERT=1 node scripts/run-video-check.cjs experience-smoke.cjs"
   },
   "dependencies": {
     "@tesseract.js-data/chi_sim": "1.0.0",

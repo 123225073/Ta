@@ -1,10 +1,10 @@
 # 拓 Ta · Windows 版
 
-这是 Ta 的 Windows 10/11 x64 客户端，版本为 **1.13.0**。它不是在 Windows 上勉强运行 Swift/macOS 程序，而是保留原产品定位与品牌，重新实现 Windows 的屏幕捕获、快捷键、托盘、安全存储、剪贴板、素材库、安装和更新边界。
+这是风沙 · 拓的 Windows 10/11 x64 客户端，版本为 **1.14.0**。截图、录屏、录音、剪辑与 SOP 共用本地素材，安装名称与数据标识继续使用“拓 Ta”。
 
 ## 直接安装
 
-1. 运行 `release/Ta-Windows-1.13.0-x64-Setup.exe`；
+1. 运行 `release/Ta-Windows-1.14.0-x64-Setup.exe`；
 2. 按安装向导选择目录；
 3. 从桌面快捷方式“拓 Ta”启动；
 4. 关闭主窗口后，程序继续驻留系统托盘，全局快捷键仍然有效。
@@ -12,6 +12,8 @@
 卸载默认保留设置和截图历史，避免误删用户资料。
 
 ## Windows 功能
+
+- **风沙工作台与性能优化**：统一录制、素材库、剪辑和 SOP 的深浅主题；素材名称搜索、视频/录音筛选；停止已保存素材的重复查询，播放时复用媒体元素并减少时间线重绘。详见 [1.14.0 使用说明](../docs/release-notes-v1.14.0.md)。
 
 - **AI 剪辑 CLI**：安装目录 `resources/cli/ta-video.cmd` 提供项目查询、原片截帧、批量编辑预演/应用、撤销/重做、导入与导出。用法见 [AI 调用说明](resources/cli/AI-EDITING.md)。
 
@@ -81,13 +83,14 @@
 
 ## 从源码构建
 
-要求 Node.js 22 或更高版本，以及 Visual Studio C++ Build Tools（包含 Windows SDK、CMake、Ninja）。当前测试机使用 Node.js 23.11.0。
+要求 Node.js 22 或更高版本、PowerShell 7，以及 Visual Studio C++ Build Tools（包含 Windows SDK、CMake、Ninja）。PowerShell 7 仅用于构建：`build:capture` 从辅助脚本中的 C# 内存编译 .NET Framework DLL，安装后的程序继续使用系统自带的 Windows PowerShell，不需要额外安装运行时。修改辅助脚本中的 C# 后必须重新构建 DLL。
 
 ```powershell
 cd windows
 npm install --legacy-peer-deps
 npm run typecheck
 npm test
+npm run build:capture
 npm run test:preview-fidelity
 npm run build
 npm run smoke

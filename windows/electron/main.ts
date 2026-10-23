@@ -1333,14 +1333,7 @@ async function captureRegion(display: Display, rect: SelectionRect): Promise<Nat
 
 async function sendMouseWheel(x: number, y: number, amount = -720) {
   const script = [
-    'Add-Type -TypeDefinition @\"',
-    'using System;',
-    'using System.Runtime.InteropServices;',
-    'public static class TaMouse {',
-    '  [DllImport("user32.dll")] public static extern bool SetCursorPos(int X, int Y);',
-    '  [DllImport("user32.dll")] public static extern void mouse_event(uint flags, uint dx, uint dy, int data, UIntPtr extra);',
-    '}',
-    '\"@',
+    `$ErrorActionPreference = 'Stop'; Add-Type -Path '${path.join(path.dirname(captureHostScriptPath()), 'ta-capture-host.dll').replace(/'/g, "''")}'`,
     `[TaMouse]::SetCursorPos(${Math.round(x)}, ${Math.round(y)}) | Out-Null`,
     `[TaMouse]::mouse_event(0x0800, 0, 0, ${amount}, [UIntPtr]::Zero)`,
   ].join('\n')
@@ -1352,16 +1345,7 @@ async function inspectNativeWindow(window: BrowserWindow) {
   const buffer = window.getNativeWindowHandle()
   const handle = buffer.length >= 8 ? buffer.readBigUInt64LE() : BigInt(buffer.readUInt32LE())
   const script = [
-    'Add-Type -TypeDefinition @"',
-    'using System;',
-    'using System.Runtime.InteropServices;',
-    'public static class TaWindowStyle {',
-    '  [StructLayout(LayoutKind.Sequential)] public struct Rect { public int Left; public int Top; public int Right; public int Bottom; }',
-    '  [DllImport("user32.dll", EntryPoint="GetWindowLongPtrW")] public static extern IntPtr GetWindowLongPtr(IntPtr hWnd, int index);',
-    '  [DllImport("user32.dll")] public static extern IntPtr GetWindow(IntPtr hWnd, uint command);',
-    '  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out Rect rect);',
-    '}',
-    '"@',
+    `$ErrorActionPreference = 'Stop'; Add-Type -Path '${path.join(path.dirname(captureHostScriptPath()), 'ta-capture-host.dll').replace(/'/g, "''")}'`,
     `$handle = [IntPtr]::new([Int64]${handle.toString()})`,
     '$style = [TaWindowStyle]::GetWindowLongPtr($handle, -20).ToInt64()',
     '$owner = [TaWindowStyle]::GetWindow($handle, 4).ToInt64()',

@@ -10,3 +10,4 @@ output/
 *.log
 native/**/build/
 resources/video/
+resources/capture/*.dll

@@ -3,7 +3,7 @@ $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName System.Windows.Forms
-Add-Type -TypeDefinition @'
+$source = @'
 using System;
 using System.Collections.Generic;
 using System.Drawing;
@@ -17,6 +17,18 @@ public static class TaCaptureDpiAwareness {
   public static void ForceOpaque(byte[] pixels) {
     for (int offset = 3; offset < pixels.Length; offset += 4) pixels[offset] = 255;
   }
+}
+
+public static class TaMouse {
+  [DllImport("user32.dll")] public static extern bool SetCursorPos(int X, int Y);
+  [DllImport("user32.dll")] public static extern void mouse_event(uint flags, uint dx, uint dy, int data, UIntPtr extra);
+}
+
+public static class TaWindowStyle {
+  [StructLayout(LayoutKind.Sequential)] public struct Rect { public int Left; public int Top; public int Right; public int Bottom; }
+  [DllImport("user32.dll", EntryPoint="GetWindowLongPtrW")] public static extern IntPtr GetWindowLongPtr(IntPtr hWnd, int index);
+  [DllImport("user32.dll")] public static extern IntPtr GetWindow(IntPtr hWnd, uint command);
+  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out Rect rect);
 }
 
 public static class TaNativeWindows {
@@ -103,7 +115,13 @@ public static class TaNativeWindows {
     return windows.ToArray();
   }
 }
-'@ -ReferencedAssemblies System.Drawing
+'@
+$compiledHelper = Join-Path $PSScriptRoot 'ta-capture-host.dll'
+if (Test-Path -LiteralPath $compiledHelper) {
+  Add-Type -Path $compiledHelper
+} else {
+  Add-Type -TypeDefinition $source -ReferencedAssemblies System.Drawing
+}
 [void][TaCaptureDpiAwareness]::SetProcessDpiAwarenessContext([IntPtr](-4))
 
 # Prime GDI+ without retaining any desktop content so the first user-triggered
