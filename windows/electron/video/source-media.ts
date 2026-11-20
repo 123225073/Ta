@@ -7,6 +7,16 @@ import {promisify} from 'node:util'
 import {VideoStore} from './store'
 import type {VideoProject} from './model'
 const exec=promisify(execFile)
+function mediaBytes(file:string|undefined){
+  const stat=file?fs.statSync(file,{throwIfNoEntry:false}):undefined
+  return stat?.isFile()?stat.size:undefined
+}
+async function copyMedia(source:string,destination:string){
+  await fs.promises.copyFile(source,destination,fs.constants.COPYFILE_EXCL)
+  if(mediaBytes(destination))return destination
+  await fs.promises.unlink(destination)
+  throw Error('原片为空，无法另存。请重新核对项目中的录制文件。')
+}
 
 export function mediaName(title:string, audio=false){
   let name=title.trim().replace(/[<>:"/\\|?*\x00-\x1f]/g,'-').replace(/[. ]+$/g,'').replace(/\.(mp4|mp3)$/i,'').slice(0,100)
@@ -33,9 +43,13 @@ export class SourceMedia {
     this.canPrepare=canPrepare;this.enqueueMissing()
     this.timer??=setInterval(()=>this.pump(),1000);this.timer.unref()
   }
-  enqueueMissing(){
+  enqueueMissing(projects=this.store.list()){
     if(this.closing)return
-    for(const p of this.store.list())if(p.status!=='recording'&&!this.errors.has(p.id)&&!this.state(p.id).ready&&!this.jobs.has(p.id))this.queued.add(p.id)
+    for(const p of projects){
+      if(p.status==='recording'||this.errors.has(p.id)||this.jobs.has(p.id))continue
+      const source=this.state(p.id,p)
+      if(!source.ready&&!source.unavailable)this.queued.add(p.id)
+    }
     this.pump()
   }
   private pump(){
@@ -57,7 +71,29 @@ export class SourceMedia {
     const job=(this.jobs.get(id)??Promise.resolve()).catch(()=>{}).then(fn)
     this.jobs.set(id,job);void job.finally(()=>{if(this.jobs.get(id)===job)this.jobs.delete(id)}).catch(()=>{});return job
   }
-  state(id:string){const p=this.store.get(id),file=p.sourceFile?this.store.media(id,'source'):undefined;return{ready:!!file&&fs.existsSync(file),busy:this.busy(id),queued:this.queued.has(id),error:this.errors.get(id),progress:this.progress.get(id)??0,file,tracks:p.sourceTracks,retainOriginals:p.retainOriginals===true}}
+  private draftFiles(p:VideoProject){
+    const names=[...(p.kind==='audio'?[]:['screen.mp4']),...(p.hasSystem?['system.wav']:[]),...(p.hasMic?['mic.wav']:[])]
+    return names.map(name=>this.store.file(p.id,name))
+  }
+  private hasDrafts(p:VideoProject){
+    const required=this.draftFiles(p)
+    return required.length>0&&required.every(file=>(mediaBytes(file)??0)>0)
+  }
+  state(id:string,listed?:VideoProject){
+    const common={busy:this.busy(id),queued:this.queued.has(id),progress:this.progress.get(id)??0}
+    try{
+      const p=listed??this.store.get(id)
+      const file=p.sourceFile?this.store.media(id,'source'):undefined
+      const bytes=mediaBytes(file),ready=(bytes??0)>0
+      const unavailable=!ready && p.status!=='recording' && !this.hasDrafts(p)
+      const cleanupPending=ready && p.retainOriginals===false && p.sourceTracks!==undefined && this.draftFiles(p).some(draft=>fs.existsSync(draft))
+      const missing=bytes===0?'原片为空，且缺少完整录制底稿。':'无法找到可用原片或完整录制底稿。'
+      const error=unavailable?missing+'请从备份恢复到原位置，或重新导入视频。':this.errors.get(id)
+      return{...common,ready,unavailable,cleanupPending,bytes:ready?bytes:undefined,error,file,tracks:p.sourceTracks,retainOriginals:p.retainOriginals===true}
+    }catch{
+      return{...common,ready:false,unavailable:true,cleanupPending:false,bytes:undefined,error:'无法读取此原片，请检查保存磁盘和文件权限。',file:undefined}
+    }
+  }
   ensure(id:string){this.queued.delete(id);this.errors.delete(id);return this.serial(id,()=>this.prepare(id)).catch(e=>{this.errors.set(id,e instanceof Error?e.message:String(e));throw e})}
   compact(id:string){return this.serial(id,()=>this.prepare(id,true))}
   private async probe(file:string){return JSON.parse((await exec(path.join(this.bin,'ffprobe.exe'),['-v','error','-show_streams','-show_format','-of','json',file],{windowsHide:true,timeout:30000})).stdout)}
@@ -86,8 +122,17 @@ export class SourceMedia {
     const p=this.store.get(id);if(p.status==='recording')throw Error('请等待录制结束。')
     const dir=path.join(this.store.directory(id),'原片');fs.mkdirSync(dir,{recursive:true})
     const target=path.join(dir,mediaName(p.title,p.kind==='audio'))
-    if(p.sourceFile&&fs.existsSync(this.store.media(id,'source'))&&(!upgrade||p.sourceTracks!==undefined)){const old=this.store.media(id,'source');if(old!==target){if(fs.existsSync(target))throw Error('此名称的文件已存在，请换一个名称。');await fs.promises.rename(old,target);this.store.write({...this.store.get(id),sourceFile:path.basename(target)})}return target}
-    const temp=path.join(dir,`preparing-${Date.now()}.${p.kind==='audio'?'mp3':'mp4'}`)
+    const old=p.sourceFile?this.store.media(id,'source'):undefined,oldBytes=mediaBytes(old)
+    if(old&&(oldBytes??0)>0&&(!upgrade||p.sourceTracks!==undefined)){
+      if(old===target||p.sourceTitle===p.title)return old
+      if(fs.existsSync(target))throw Error('此名称的文件已存在，请换一个名称。')
+      await fs.promises.rename(old,target);this.store.write({...this.store.get(id),sourceFile:path.basename(target),sourceTitle:p.title})
+      return target
+    }
+    if(!this.hasDrafts(p))throw Error('项目的录制底稿不完整，请恢复原文件或重新导入视频。')
+    const ext=path.extname(target)
+    const temp=path.join(dir,path.basename(target,ext).slice(0,60)+'-'+randomUUID()+ext)
+    let published=target,committed=false
     const args=['-v','error'],audio:string[]=[],inputs:{key:'mic'|'system';index:number}[]=[],tracks:NonNullable<VideoProject['sourceTracks']>={};let input=0
     if(p.kind!=='audio'){args.push('-i',this.store.file(id,'screen.mp4'));input++}
     for(const [name,on,key] of [['system.wav',p.hasSystem,'system'],['mic.wav',p.hasMic,'mic']] as const)if(on){args.push('-i',this.store.file(id,name));inputs.push({key,index:input});audio.push(`[${input++}:a]`)}
@@ -103,22 +148,35 @@ export class SourceMedia {
       await new Promise<void>((resolve,reject)=>{const child=spawn(path.join(this.bin,'ffmpeg.exe'),[...args,'-t',String(p.duration/1000),'-progress','pipe:1',temp],{windowsHide:true});let log='',buffer='';child.stderr.on('data',d=>{log=(log+d).slice(-2000)});child.stdout.on('data',d=>{buffer+=d;const lines=buffer.split('\n');buffer=lines.pop()??'';for(const line of lines)if(line.startsWith('out_time_us='))this.progress.set(id,Math.min(.99,Number(line.split('=')[1])/1000/p.duration))});child.once('error',reject);child.once('close',code=>code===0?resolve():reject(Error('原片保存失败，原始录制仍保留。'+log)))})
       if(archiveTemp){const a=['-v','error',...inputs.flatMap(i=>['-i',this.store.file(id,i.key+'.wav')])];for(const [i,item] of inputs.entries()){a.push('-map',`${i}:a:0`);tracks[item.key]=i}await exec(path.join(this.bin,'ffmpeg.exe'),[...a,'-c:a','aac','-b:a','128k','-t',String(p.duration/1000),archiveTemp],{windowsHide:true,timeout:600000})}
       await this.validate(p,temp,tracks,archiveTemp)
-      if(upgrade&&p.sourceFile===path.basename(target)){await fs.promises.rename(temp,target)}else await fs.promises.link(temp,target).catch(async e=>{if(!['ENOTSUP','EPERM','EXDEV','ENOSYS'].includes(e.code))throw e;await fs.promises.copyFile(temp,target,fs.constants.COPYFILE_EXCL)})
+      if(old===target&&oldBytes===0)published=temp // Keep the registered empty file untouched during recovery.
+      else if(upgrade&&old===target){await fs.promises.rename(temp,target)}
+      else try{await fs.promises.link(temp,target)}catch(e){
+        if(!['ENOTSUP','EOPNOTSUPP','EPERM','EXDEV','ENOSYS','EINVAL'].includes((e as NodeJS.ErrnoException).code??''))throw e
+        // FAT/exFAT: the validated file is already in its final directory.
+        // Index it directly, without another copy or an overwriting rename.
+        published=temp
+      }
       if(archiveTemp)await fs.promises.rename(archiveTemp,path.join(dir,archive!))
-      const next={...this.store.get(id),sourceFile:path.basename(target),sourceTracks:tracks,audioArchive:archive};try{this.store.write(next);this.store.write(next)}catch(e){if(!upgrade){await fs.promises.unlink(target).catch(()=>{});if(archive)await fs.promises.unlink(path.join(dir,archive)).catch(()=>{})}throw e}
-      if(p.retainOriginals===false)await this.cleanup(id)
-      return target
-    }finally{this.progress.delete(id);await fs.promises.unlink(temp).catch(()=>{});if(archiveTemp)await fs.promises.unlink(archiveTemp).catch(()=>{})}
+      const next={...this.store.get(id),sourceFile:path.basename(published),sourceTitle:p.title,sourceTracks:tracks,audioArchive:archive}
+      try{this.store.write(next);committed=true}catch(e){if(!upgrade){await fs.promises.unlink(published).catch(()=>{});if(archive)await fs.promises.unlink(path.join(dir,archive)).catch(()=>{})}throw e}
+      // Rotate the new references into the backup before removing any drafts.
+      // A busy backup or a locked draft cannot invalidate the committed source.
+      try{
+        this.store.write(next)
+        if(p.retainOriginals===false)await this.cleanup(id)
+      }catch{/* Remaining drafts are reported by state(). */}
+      return published
+    }finally{this.progress.delete(id);if(!committed||published!==temp)await fs.promises.unlink(temp).catch(()=>{});if(archiveTemp)await fs.promises.unlink(archiveTemp).catch(()=>{})}
   }
   copy(id:string,destination:string){return this.serial(id,async()=>{
     const source=await this.prepare(id),p=this.store.get(id);
-    if(p.kind==='audio'||new Set(Object.values(p.sourceTracks??{})).size<2){await fs.promises.copyFile(source,destination,fs.constants.COPYFILE_EXCL);return destination}
-    const temp=path.join(path.dirname(destination),'.ta-share-'+randomUUID()+'.mp4');try{await exec(path.join(this.bin,'ffmpeg.exe'),['-v','error','-nostdin','-n','-i',source,'-map','0:v:0','-map','0:a:0','-c','copy','-movflags','+faststart',temp],{windowsHide:true,timeout:600000});await fs.promises.copyFile(temp,destination,fs.constants.COPYFILE_EXCL);return destination}finally{await fs.promises.unlink(temp).catch(()=>{})}
+    if(p.kind==='audio'||new Set(Object.values(p.sourceTracks??{})).size<2)return copyMedia(source,destination)
+    const temp=path.join(path.dirname(destination),'.ta-share-'+randomUUID()+'.mp4');try{await exec(path.join(this.bin,'ffmpeg.exe'),['-v','error','-nostdin','-n','-i',source,'-map','0:v:0','-map','0:a:0','-c','copy','-movflags','+faststart',temp],{windowsHide:true,timeout:600000});return await copyMedia(temp,destination)}finally{await fs.promises.unlink(temp).catch(()=>{})}
   })}
   rename(id:string,title:unknown){return this.serial(id,async()=>{
     if(typeof title!=='string'||!title.trim()||title.trim().length>100)throw Error('请输入 1–100 字的名称。')
     const p=this.store.get(id);if(p.status==='recording')throw Error('录制完成后才能重命名。')
-    const next={...p,title:title.trim(),revision:p.revision+1}
+    const next={...p,title:title.trim(),sourceTitle:p.sourceFile?title.trim():undefined,revision:p.revision+1}
     if(p.sourceFile&&fs.existsSync(this.store.media(id,'source'))){const old=this.store.media(id,'source'),name=mediaName(next.title,p.kind==='audio'),target=path.join(path.dirname(old),name);if(old!==target){if(fs.existsSync(target))throw Error('此名称的文件已存在，请换一个名称。');await fs.promises.rename(old,target);try{this.store.write({...next,sourceFile:name})}catch(e){await fs.promises.rename(target,old);throw e}return this.store.get(id)}}
     this.store.write(next);return next
   })}

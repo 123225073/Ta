@@ -4,6 +4,18 @@ import os from 'node:os'
 import path from 'node:path'
 import {VideoStore} from './store'
 describe('video project persistence',()=>{
+  it('reports inaccessible indexed projects without forgetting their location',()=>{
+    const root=fs.mkdtempSync(path.join(os.tmpdir(),'ta-indexed-media-'))
+    try {
+      const store=new VideoStore(path.join(root,'index'),path.join(root,'media'))
+      const p=store.create(640,360,false,false)
+      const dir=store.directory(p.id)
+      fs.renameSync(dir,dir+'.offline')
+      expect(store.listWithAvailability()).toEqual({projects:[],unavailable:1})
+      fs.renameSync(dir+'.offline',dir)
+      expect(store.listWithAvailability()).toEqual({projects:[p],unavailable:0})
+    } finally { fs.rmSync(root,{recursive:true,force:true}) }
+  })
   it('keeps old projects reachable after changing the destination and rejects path traversal',()=>{
     const root=fs.mkdtempSync(path.join(os.tmpdir(),'ta-video-store-')),store=new VideoStore(path.join(root,'index'),path.join(root,'old'))
     const p=store.create(640,360,false,true);store.saveSettings({...store.settings,root:path.join(root,'new')})

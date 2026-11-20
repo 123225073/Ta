@@ -44,6 +44,7 @@ struct CaptureConfig {
     int cropX = 0, cropY = 0, cropW = 0, cropH = 0;
     std::string systemPath, micPath;
     int fps = 60;
+    int videoBitrate = 0;
     int width = 0;
     int height = 0;
     MonitorBounds bounds{};
@@ -601,6 +602,7 @@ bool parseConfig(const std::string& json, CaptureConfig& config) {
     }
     config.displayId = findInt64(json, "displayId", 0);
     config.fps = std::clamp(findInt(json, "fps", 60), 1, 120);
+    config.videoBitrate = findInt(json, "videoBitrate", 0);
     config.width = findInt(json, "videoWidth", findInt(json, "width", 0));
     config.height = findInt(json, "videoHeight", findInt(json, "height", 0));
     config.bounds.x = findInt(json, "displayX", 0);
@@ -810,7 +812,9 @@ int wmain(int argc, wchar_t* wideArgv[]) {
     height = (std::max(2, height) / 2) * 2;
 
     const int pixels = width * height;
-    const int bitrate = pixels >= 3840 * 2160 ? 45'000'000 : pixels >= 2560 * 1440 ? 28'000'000 : 18'000'000;
+    const int legacyBitrate = pixels >= 3840 * 2160 ? 45'000'000 : pixels >= 2560 * 1440 ? 28'000'000 : 18'000'000;
+    const int bitrate = config.videoBitrate > 0 ? std::clamp(config.videoBitrate, 750'000, 45'000'000) : legacyBitrate;
+    std::cout << "{\"event\":\"video-bitrate\",\"target\":" << bitrate << "}" << std::endl;
 
     WebcamCapture webcamCapture;
     bool webcamActive = false;

@@ -3,7 +3,7 @@ export type * from '../../../electron/video/model'
 declare global {
   interface Window { taVideo: {
     rename(id:string,title:string):Promise<VideoProject>;
-    sourceState(id:string):Promise<{ready:boolean;busy:boolean;queued:boolean;error?:string;progress:number;file?:string;tracks?:{mic?:number;system?:number};retainOriginals?:boolean}>;
+    sourceState(id:string):Promise<{ready:boolean;unavailable:boolean;cleanupPending:boolean;bytes?:number;busy:boolean;queued:boolean;error?:string;progress:number;file?:string;tracks?:{mic?:number;system?:number};retainOriginals?:boolean}>;
     prepareSource(id:string):Promise<string>;
     saveSource(id:string):Promise<string|undefined>;
     chooseSource(show?:boolean):Promise<void>;switchSource(o:Pick<RecordingOptions,'sourceId'|'region'>):Promise<void>;onChooseSource(fn:()=>void):()=>void;
@@ -13,6 +13,8 @@ declare global {
     open(): Promise<void>; init(): Promise<{state:RecordingState;settings:VideoSettings;theme:string;projectId?:string;undoProject?:VideoProject}>;
     closeReady():Promise<void>;onClosing(fn:()=>void):()=>void;
     sources():Promise<RecordingSource[]>; microphones():Promise<string[]>; list():Promise<VideoProject[]>;
+    sourceDimensions(id:string):Promise<{width:number;height:number}>;
+    library():Promise<{projects:VideoProject[];unavailable:number}>;
     get(id:string):Promise<VideoProject>; save(id:string,p:VideoProject):Promise<VideoProject>;
     start(o:RecordingOptions):Promise<string>;pause(p:boolean):Promise<void>;stop():Promise<void>;
     ink():Promise<void>;mark(m:Mark):Promise<void>;clear():Promise<void>;undoMark():Promise<void>;

@@ -14,6 +14,28 @@ function seed(mic=true,system=true,audio=false,keep=false){store.settings.retain
  compact.timeline=migrateTimeline(compact);compact.timeline.tracks.find(t=>t.id==='system.wav').muted=true;store.write(compact);const exporter=new VideoExporter(bin,store,()=>{}),edit=path.join(out,'edited.mp4');await exporter.export(compact,edit,360);assert(peakAt(edit,440)>peakAt(edit,880)*30,'muting system sound must preserve microphone');assert(fs.readdirSync(path.join(store.directory(p.id),'exports')).length===0,'export cache not removed');
  const cli=new VideoCLI(store,bin,exporter),frame=path.join(out,'cli.png');await cli.execute({command:'frame',projectId:p.id,time:1000,output:frame});assert(fs.existsSync(frame),'CLI frame after cleanup');
  const keep=seed(true,true,false,true);await service.ensure(keep.id);assert(['screen.mp4','mic.wav','system.wav'].every(n=>fs.existsSync(store.file(keep.id,n))),'lossless retention switch');
+ // A lock during the last unlink must preserve the already committed, playable MP4 after restart.
+ const locked=seed(),lockedWav=store.file(locked.id,'system.wav'),unlink=fs.promises.unlink;
+ try{
+  fs.promises.unlink=async file=>{if(file===lockedWav)throw Object.assign(Error('simulated locked draft'),{code:'EBUSY'});return unlink(file)};
+  await service.ensure(locked.id);
+ }finally{fs.promises.unlink=unlink}
+ const reloadedStore=new VideoStore(path.join(out,'meta'),path.join(out,'projects')),reloaded=new SourceMedia(bin,reloadedStore);
+ assert(reloaded.state(locked.id).ready&&reloaded.state(locked.id).cleanupPending,'locked draft hid the committed source after restart');
+ assert(!fs.existsSync(store.file(locked.id,'screen.mp4'))&&fs.existsSync(lockedWav),'partial cleanup not exercised');
+ assert(probe(reloadedStore.media(locked.id,'source')).streams.length===4,'committed multitrack source unavailable');
+ const empty=seed(false,false),emptyDir=path.join(store.directory(empty.id),'原片');
+ empty.sourceFile=require('../dist-electron/video/source-media').mediaName(empty.title);store.write(empty);fs.mkdirSync(emptyDir);fs.writeFileSync(store.media(empty.id,'source'),'');
+ assert(!service.state(empty.id).ready&&!service.state(empty.id).unavailable,'empty canonical with recoverable drafts');
+ const restored=await service.ensure(empty.id);assert(probe(restored).streams[0].codec_type==='video'&&await service.ensure(empty.id)===restored,'restored source must remain stable');
+ const fat=seed(false,false),originalLink=fs.promises.link,originalCopy=fs.promises.copyFile;
+ let fatSource;try{
+  fs.promises.link=async()=>{throw Object.assign(Error('volume without hardlinks'),{code:'ENOTSUP'})};
+  fs.promises.copyFile=async()=>{throw Object.assign(Error('no room for extra full copy'),{code:'ENOSPC'})};
+  fatSource=await service.ensure(fat.id);
+ }finally{fs.promises.link=originalLink;fs.promises.copyFile=originalCopy}
+ assert(probe(fatSource).streams[0].codec_type==='video'&&await service.ensure(fat.id)===fatSource,'no-hardlink fallback lost source');
+ assert(fs.readdirSync(path.dirname(fatSource)).filter(file=>file.endsWith('.mp4')).length===1,'no-hardlink fallback duplicated original');
  const audio=seed(true,false,true);await service.ensure(audio.id);assert(probe(store.media(audio.id,'source')).streams[0].codec_name==='mp3','audio MP3');assert(!fs.existsSync(store.file(audio.id,'mic.wav')),'audio WAV not removed');
  const dual=seed(true,true,true);await service.ensure(dual.id);assert(store.get(dual.id).audioArchive&&peakAt(await service.resolve(dual.id,'mic.wav'),440)>.01,'dual-source MP3 independent compact archive');assert(!fs.existsSync(store.file(dual.id,'mic.wav')),'dual-source WAV remains');
  const old=seed();old.retainOriginals=undefined;store.write(old);await service.ensure(old.id);const plan=await service.cleanupPlan(old.id);assert(plan.length===3&&fs.existsSync(store.file(old.id,'screen.mp4')),'legacy needs explicit cleanup');const corrupt=seed();fs.writeFileSync(store.file(corrupt.id,'screen.mp4'),'broken');await service.ensure(corrupt.id).then(()=>{throw Error('corruption accepted')},()=>{});assert(fs.existsSync(store.file(corrupt.id,'mic.wav')),'failed generation deleted originals');

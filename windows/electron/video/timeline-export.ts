@@ -3,6 +3,7 @@ import path from 'node:path'
 import sharp from 'sharp'
 import {clipDuration,clipEnd,keyAt,timelineDuration,type TimelineClip,type Timeline} from './timeline'
 import {markSvg,type VideoProject} from './model'
+import {exportBitrate} from './recording-quality'
 export type RenderRun=(args:string[],progress?:(time:number)=>void,input?:string)=>Promise<string>
 function keyExpression(c:TimelineClip,field:'scale'|'cx'|'cy',offset=0){
   const keys=[...c.keys].sort((a,b)=>a.time-b.time);if(!keys.length)return String(field==='scale'?1:.5)
@@ -34,5 +35,5 @@ export async function renderTimeline(p:VideoProject,job:string,destination:strin
   }}
   graph.push(`[${layer}]${zoomFilter(cameraExpressions(t),w,h)},format=yuv420p[outv]`)
   graph.push(`${audios.map(a=>`[${a}]`).join('')}amix=inputs=${audios.length}:normalize=0:duration=longest,alimiter=limit=0.95:level=0[outa]`)
-  await run([...args,'-filter_complex_script','pipe:0','-map','[outv]','-map','[outa]','-c:v',encoder,'-b:v',String(Math.max(3000000,w*h*6)),'-g','30','-c:a','aac','-ar','48000','-ac','2','-t',String(duration),'-movflags','+faststart','-progress','pipe:1',destination],ms=>notify(Math.min(.99,ms/(duration*1000)),'正在导出多轨道视频'),graph.join(';'))
+  await run([...args,'-filter_complex_script','pipe:0','-map','[outv]','-map','[outa]','-c:v',encoder,'-b:v',String(exportBitrate(p.quality,w,h)),'-g','30','-c:a','aac','-ar','48000','-ac','2','-t',String(duration),'-movflags','+faststart','-progress','pipe:1',destination],ms=>notify(Math.min(.99,ms/(duration*1000)),'正在导出多轨道视频'),graph.join(';'))
 }

@@ -40,6 +40,11 @@ replace('    CaptureConfig config;', `    if (std::string(argv[1]) == "--list-mi
     }
     CaptureConfig config;`)
 replace('    int fps = 60;', '    int cropX = 0, cropY = 0, cropW = 0, cropH = 0;\n    std::string systemPath, micPath;\n    int fps = 60;')
+replace('    int fps = 60;', '    int fps = 60;\n    int videoBitrate = 0;')
+replace('    config.fps = std::clamp(findInt(json, "fps", 60), 1, 120);', '    config.fps = std::clamp(findInt(json, "fps", 60), 1, 120);\n    config.videoBitrate = findInt(json, "videoBitrate", 0);')
+replace("    const int bitrate = pixels >= 3840 * 2160 ? 45'000'000 : pixels >= 2560 * 1440 ? 28'000'000 : 18'000'000;", `    const int legacyBitrate = pixels >= 3840 * 2160 ? 45'000'000 : pixels >= 2560 * 1440 ? 28'000'000 : 18'000'000;
+    const int bitrate = config.videoBitrate > 0 ? std::clamp(config.videoBitrate, 750'000, 45'000'000) : legacyBitrate;
+    std::cout << "{\\"event\\":\\"video-bitrate\\",\\"target\\":" << bitrate << "}" << std::endl;`)
 replace('    config.recordingId =', '    config.cropX = findInt(json, "cropX", 0);\n    config.cropY = findInt(json, "cropY", 0);\n    config.cropW = findInt(json, "cropW", 0);\n    config.cropH = findInt(json, "cropH", 0);\n    config.systemPath = findString(json, "systemPath");\n    config.micPath = findString(json, "micPath");\n    config.recordingId =')
 replace('    int width = session.captureWidth();\n    int height = session.captureHeight();', `    int width = config.cropW > 0 ? config.cropW : session.captureWidth();
     int height = config.cropH > 0 ? config.cropH : session.captureHeight();

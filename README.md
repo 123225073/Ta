@@ -7,7 +7,7 @@
 ### 捕捉此刻，留住灵感。
 
 [![Windows](https://img.shields.io/badge/Windows-10%2F11-1676D2.svg)](./windows/README.md)
-[![Version](https://img.shields.io/badge/Windows-v1.14.0-FF4D37.svg)](./docs/release-notes-v1.14.0.md)
+[![Version](https://img.shields.io/badge/Windows-v1.15.0-FF4D37.svg)](./docs/release-notes-v1.15.0.md)
 [![Electron](https://img.shields.io/badge/Electron-44-47848F.svg)](./windows/package.json)
 [![License](https://img.shields.io/badge/License-MIT-D6402F.svg)](./LICENSE)
 
@@ -23,7 +23,9 @@
 
 Windows 版不是把 macOS 程序套壳运行，而是针对 Windows 重新实现了屏幕捕获、DPI、多显示器、全局快捷键、托盘、剪贴板、安全存储、安装和窗口生命周期。
 
-## Windows v1.14.0 能做什么
+## Windows v1.15.0 能做什么
+
+- **日常录屏**：选择显示器或按标题查找窗口，确认范围、声音、画质和预计占用。录完可在素材库直接回放。详见 [1.15.0 使用说明](./docs/release-notes-v1.15.0.md)。
 
 - **更轻快的工作台**：录屏、素材、剪辑和 SOP 统一风沙主题；按名称搜索、视频/录音分类；减少素材状态查询、时间线重绘和播放器重复创建。详见 [1.14.0 更新说明](./docs/release-notes-v1.14.0.md)。
 
@@ -84,15 +86,15 @@ Windows 版不是把 macOS 程序套壳运行，而是针对 Windows 重新实�
 
 ### 使用安装包
 
-Windows 10 22H2 或 Windows 11 x64 用户可运行本项目构建出的：
+Windows 10 22H2 或 Windows 11 x64 用户可从 [GitHub Release](https://github.com/123225073/Ta/releases/tag/v1.15.0) 下载安装包，或运行本地构建出的文件。
 
 ```text
-windows/release/Ta-Windows-1.4.0-x64-Setup.exe
+windows/release/Ta-Windows-1.15.0-x64-Setup.exe
 ```
 
 安装器创建桌面和开始菜单快捷方式。覆盖安装不会主动删除用户设置、加密后的 API Key 或截图历史；卸载配置为保留用户数据。
 
-> `release/` 是本机构建目录，不提交到 Git。仓库若尚未发布 GitHub Release，请按下面步骤从源码构建。
+`release/` 是本机构建目录。发行附件提供安装包和 SHA-256 校验值。
 
 ### 从源码构建
 

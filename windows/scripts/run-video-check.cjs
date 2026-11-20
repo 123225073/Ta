@@ -1,6 +1,11 @@
 const {spawn}=require('node:child_process'),path=require('node:path')
 const name=process.argv[2]||'video-capture-probe.cjs'
-if(!['experience-smoke.cjs','source-audio-smoke.cjs','recording-resilience-smoke.cjs','window-resize-smoke.cjs','video-capture-probe.cjs','video-ui-smoke.cjs','video-long-probe.cjs','sop-ui-smoke.cjs','timeline-ui-smoke.cjs','editor-interaction-smoke.cjs','annotation-ui-smoke.cjs','editor-usability-smoke.cjs','feishu-install-check.cjs'].includes(name))throw Error('Unknown test')
+if(!['recording-entry-smoke.cjs','experience-smoke.cjs','source-audio-smoke.cjs','recording-resilience-smoke.cjs','window-resize-smoke.cjs','video-capture-probe.cjs','video-ui-smoke.cjs','video-long-probe.cjs','sop-ui-smoke.cjs','timeline-ui-smoke.cjs','editor-interaction-smoke.cjs','annotation-ui-smoke.cjs','editor-usability-smoke.cjs','feishu-install-check.cjs'].includes(name))throw Error('Unknown test')
 const env={...process.env};delete env.ELECTRON_RUN_AS_NODE
+const fs=require('node:fs'),os=require('node:os')
+if(name==='recording-entry-smoke.cjs')env.TA_RECORD_ENTRY_DIR=fs.mkdtempSync(path.join(os.tmpdir(),'ta-record-entry-'))
 const child=spawn(require('electron'),[path.join(__dirname,name)],{env,stdio:'inherit',windowsHide:true})
-child.on('error',e=>{console.error(e);process.exitCode=1});child.on('exit',code=>{process.exitCode=code??1})
+child.on('error',e=>{console.error(e);process.exitCode=1});child.on('exit',code=>{
+  if(name==='recording-entry-smoke.cjs'&&code===0)fs.rmSync(env.TA_RECORD_ENTRY_DIR,{recursive:true,force:true,maxRetries:5})
+  process.exitCode=code??1
+})

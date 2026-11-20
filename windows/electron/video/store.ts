@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import { validateEdits, type VideoProject, type VideoSettings } from './model'
+import {DEFAULT_RECORDING_QUALITY, isRecordingQuality} from './recording-quality'
 export class VideoStore {
   private index:Record<string,string>={}
   settings:VideoSettings
@@ -10,6 +11,7 @@ export class VideoStore {
     this.settings={root:defaultRoot,startKey:'Ctrl+Shift+7',pauseKey:'Ctrl+Shift+8',stopKey:'Ctrl+Shift+9',annotateKey:'Ctrl+Shift+0',mic:false,system:false,micName:'',countdown:3,retainOriginals:false}
     try{this.index=JSON.parse(fs.readFileSync(path.join(metadata,'index.json'),'utf8'))}catch{}
     try{this.settings={...this.settings,...JSON.parse(fs.readFileSync(path.join(metadata,'settings.json'),'utf8'))}}catch{}
+    if(!isRecordingQuality(this.settings.quality)) this.settings.quality=DEFAULT_RECORDING_QUALITY
   }
   private atomic(file:string,value:unknown){
     const temp=file+'.tmp';fs.writeFileSync(temp,JSON.stringify(value,null,2),{flush:true})
@@ -36,17 +38,26 @@ export class VideoStore {
     return{file:this.media(id,name),stream:key?'a:0':'v:0'}
   }
   audioStream(id:string,name:string){return ['mic.wav','system.wav'].includes(name)?this.input(id,name).stream:'a:0'}
-  create(width:number,height:number,hasMic:boolean,hasSystem:boolean){
+  create(width:number,height:number,hasMic:boolean,hasSystem:boolean,quality?:VideoProject['quality']){
     const id=Date.now()+'-'+crypto.randomBytes(4).toString('hex'), date=new Date()
     const dir=path.join(this.settings.root,String(date.getFullYear()),String(date.getMonth()+1).padStart(2,'0'),String(date.getDate()).padStart(2,'0'),id)
     fs.mkdirSync(dir,{recursive:true});this.index[id]=dir;this.atomic(path.join(this.metadata,'index.json'),this.index)
     const p:VideoProject={schemaVersion:1,id,title:`录屏 ${date.toLocaleString('zh-CN')}`,createdAt:date.toISOString(),revision:0,width,height,duration:1,status:'recording',hasMic,hasSystem,marks:[],cuts:[],mutes:[],zooms:[],crop:{x:0,y:0,width,height},micVolume:1,systemVolume:1,exports:[]}
+    if(quality) p.quality=quality
     p.retainOriginals=this.settings.retainOriginals===true;this.write(p);return p
   }
   get(id:string):VideoProject{const file=this.file(id,'project.json');try{return JSON.parse(fs.readFileSync(file,'utf8'))}catch{try{return JSON.parse(fs.readFileSync(file+'.backup','utf8'))}catch{throw Error('项目文件无法读取。原始录像仍保留在保存目录。')}}}
   write(p:VideoProject){this.atomic(this.file(p.id,'project.json'),p)}
   save(id:string,edit:unknown){const base=this.get(id);if(base.status==='recording')throw Error('录制完成后才能编辑。');const p=validateEdits(edit,base);this.write(p);return p}
-  list(){return Object.keys(this.index).sort().reverse().flatMap(id=>{try{return[this.get(id)]}catch{return[]}})}
+  listWithAvailability() {
+    const projects:VideoProject[]=[]
+    let unavailable=0
+    for (const id of Object.keys(this.index).sort().reverse()) {
+      try { projects.push(this.get(id)) } catch { unavailable++ }
+    }
+    return {projects, unavailable}
+  }
+  list(){return this.listWithAvailability().projects}
   async trash(id:string,moveToTrash:(directory:string)=>Promise<void>){
     const dir=path.resolve(this.directory(id)),p=this.get(id);
     if(p.status==='recording')throw Error('正在录制的项目不能删除。');

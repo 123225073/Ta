@@ -159,16 +159,15 @@ function Home({ history, hotkeys, onCapture, onOpenHistory, onDeleteHistory, onL
     <div className="page home-page">
       <section className="hero">
         <div className="hero-copy">
-          <div className="eyebrow"><span /> FENGSHA / CAPTURE STUDIO</div>
-          <h1>捕捉此刻，<em>留住灵感。</em></h1>
-          <p>截图、录屏、声音与操作指引。把每一次记录，变成可用的素材。</p>
+          <h1>截图与<em>录屏</em></h1>
+          <p>截取桌面细节，或录下整块屏幕、指定窗口和自选区域。</p>
           <div className="hero-actions">
             <button className="capture-button" onClick={() => onCapture('capture')}><span>⌗</span><b>开始截图</b><kbd>{formatAccelerator(hotkeys?.capture ?? windowsDefaultHotkeys.capture) || '未启用'}</kbd></button>
-            <button className="quiet-button home-record-button" onClick={() => void window.taVideo.open()}>开始录屏 <kbd>Ctrl + F2</kbd></button>
+            <button className="quiet-button home-record-button" onClick={() => void window.taVideo.open()}><span className="home-record-lens" aria-hidden="true" />开始录屏 <kbd>Ctrl + F2</kbd></button>
             <button className="quiet-button" onClick={() => onCapture('ocr')}>极速取字</button>
           </div>
         </div>
-        <div className="hero-mark" aria-hidden="true"><span>拓</span><i>FENGSHA · CREATE & KEEP</i></div>
+        <div className="hero-mark" aria-hidden="true"><span>拓</span></div>
       </section>
 
       <section className="section actions-section">

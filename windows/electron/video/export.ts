@@ -1,4 +1,5 @@
 import {SourceMedia} from './source-media'
+import {exportBitrate} from './recording-quality'
 import { renderTimeline } from './timeline-export'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -55,7 +56,7 @@ export class VideoExporter {
         if(marks.length){args.push(...(animated?['-framerate','30','-i',path.join(job,`mark-${index}-%06d.png`)]:['-loop','1','-i',overlay]));filters.push(`[0:v]setpts=PTS-STARTPTS[base];[base][1:v]overlay=0:0:format=auto[marked]`);video='marked'}
         filters.push(`[${video}]crop=${Math.max(2,Math.floor(v.width/2)*2)}:${Math.max(2,Math.floor(v.height/2)*2)}:${Math.floor(v.x/2)*2}:${Math.floor(v.y/2)*2},scale=${w}:${h}:flags=lanczos,setsar=1,fps=30,format=yuv420p[outv]`)
         const part=path.join(job,`part-${index}.mp4`);parts.push(part)
-        args.push('-filter_complex',filters.join(';'),'-map','[outv]','-an','-frames:v',String(frame(s.end)-frame(s.start)),'-c:v',encoder,'-b:v',String(Math.max(3000000,w*h*6)),'-g','30','-movflags','+faststart','-progress','pipe:1',part)
+        args.push('-filter_complex',filters.join(';'),'-map','[outv]','-an','-frames:v',String(frame(s.end)-frame(s.start)),'-c:v',encoder,'-b:v',String(exportBitrate(p.quality,w,h)),'-g','30','-movflags','+faststart','-progress','pipe:1',part)
         await this.run(args,t=>this.notify({id:p.id,phase:'rendering',progress:Math.min(.97,(done+t)/total*.97),message:`正在导出 ${index+1}/${segments.length}`}));done+=s.end-s.start
       }
       fs.writeFileSync(path.join(job,'concat.txt'),parts.map(f=>`file '${path.basename(f)}'`).join('\n'))
